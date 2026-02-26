@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KubeCraft — Learn Kubernetes</title>
+<link rel="stylesheet" href="k8s-game.css">
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="logo">⎈ KubeCraft</div>
+    <h1>Kubernetes<br>Mission Control</h1>
+    <div class="subtitle" id="campaign-subtitle">// loading campaign...</div>
+  </header>
+
+  <div class="hud">
+    <div class="hud-item">
+      <div class="hud-label">Score</div>
+      <div class="hud-value" id="score">0</div>
+    </div>
+    <div class="hud-item">
+      <div class="hud-label">Lives</div>
+      <div class="hud-value green" id="lives">❤️ ❤️ ❤️</div>
+    </div>
+    <div class="hud-item">
+      <div class="hud-label">Streak</div>
+      <div class="hud-value yellow" id="streak">🔥 0</div>
+    </div>
+    <div class="hud-item">
+      <div class="hud-label">Level</div>
+      <div class="hud-value" id="level-label">L1 · Beginner</div>
+    </div>
+    <div class="hud-item">
+      <div class="hud-label">Jump To</div>
+      <select class="hud-select" id="level-select" aria-label="Jump to level"></select>
+    </div>
+    <div class="hud-item">
+      <div class="hud-label">Question</div>
+      <div class="hud-value" id="qcount">1 / 1</div>
+    </div>
+    <div class="hud-item">
+      <div class="hud-label">Badges</div>
+      <div class="hud-value" id="badges-earned">0</div>
+    </div>
+  </div>
+
+  <div class="progress-wrap">
+    <div class="progress-bar" id="progress"></div>
+  </div>
+
+  <div id="game-area"></div>
+</div>
+
+<script src="k8s-game-data.js"></script>
+<script src="data/levels/level-00-mission-briefing.js"></script>
+<script src="data/levels/level-01-cluster-rookie.js"></script>
+<script src="data/levels/level-02-runtime-defender.js"></script>
+<script src="data/levels/level-03-availability-engineer.js"></script>
+<script src="data/levels/level-04-control-plane-specialist.js"></script>
+<script src="data/levels/level-05-platform-operator.js"></script>
+<script src="data/levels/level-06-kubernetes-mastermind.js"></script>
+<script src="data/levels/level-07-cka-core-foundations.js"></script>
+<script src="data/levels/level-08-workload-engineering-deep-dive.js"></script>
+<script src="data/levels/level-09-networking-internals-cni.js"></script>
+<script src="data/levels/level-10-storage-stateful-platforms.js"></script>
+<script src="data/levels/level-11-security-baselines.js"></script>
+<script src="data/levels/level-12-rbac-identity-policy.js"></script>
+<script src="data/levels/level-13-observability-engineering.js"></script>
+<script src="data/levels/level-14-performance-cost-optimization.js"></script>
+<script src="data/levels/level-15-ci-cd-release-engineering.js"></script>
+<script src="data/levels/level-16-gitops-at-scale.js"></script>
+<script src="data/levels/level-17-multi-cluster-fleet-operations.js"></script>
+<script src="data/levels/level-18-backup-disaster-recovery.js"></script>
+<script src="data/levels/level-19-service-mesh-zero-trust.js"></script>
+<script src="data/levels/level-20-kubernetes-war-games.js"></script>
+<script src="k8s-game.js"></script>
+</body>
+</html>
