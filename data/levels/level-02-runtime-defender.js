@@ -32,7 +32,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "Pre-pulling on every node is fragile, doesn't scale, and breaks when new nodes are added. imagePullSecrets is the standard, declarative solution that works automatically on any node."
       ],
       "tip": "Go tip: Create the secret with: kubectl create secret docker-registry reg-creds --docker-server=registry.company.io --docker-username=user --docker-password=pass. Then add imagePullSecrets: [{name: reg-creds}] to your pod spec or attach it to the default ServiceAccount.",
-      "deepDive": "For convenience, attach the pull secret to a ServiceAccount so all pods using that account inherit it automatically: kubectl patch serviceaccount default -p '{\"imagePullSecrets\": [{\"name\": \"reg-creds\"}]}'. This avoids adding imagePullSecrets to every Deployment individually. Rotate credentials regularly and scope them per environment.",
+      "deepDive": "For convenience, attach the pull secret to a ServiceAccount so all pods using that account inherit it automatically: kubectl patch serviceaccount default -p '{\"imagePullSecrets\": [{\"name\": \"reg-creds\"}]}'. This avoids adding imagePullSecrets to every Deployment individually. Rotate credentials regularly and scope them per environment.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/\n- https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/",
       "groupId": "storageConfig",
       "isBoss": false
     },
@@ -55,7 +55,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "ConfigMaps are NOT encrypted — they store plaintext. Secrets are base64-encoded (not encrypted!) by default in etcd. To actually encrypt at rest, you need EncryptionConfiguration or an external KMS like AWS KMS or Vault."
       ],
       "tip": "Go tip: os.ReadFile(\"/etc/secrets/db-pass\") or use fsnotify to watch for secret rotation. Consider hashicorp/vault-agent-injector for dynamic short-lived credentials.",
-      "deepDive": "Even k8s Secrets aren't truly encrypted by default — they're base64 in etcd. Enable etcd encryption at rest, use Sealed Secrets (Bitnami) or External Secrets Operator with a real secrets manager (AWS Secrets Manager, GCP Secret Manager, Vault).",
+      "deepDive": "Even k8s Secrets aren't truly encrypted by default — they're base64 in etcd. Enable etcd encryption at rest, use Sealed Secrets (Bitnami) or External Secrets Operator with a real secrets manager (AWS Secrets Manager, GCP Secret Manager, Vault).\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/concepts/configuration/secret/\n- https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/",
       "groupId": "storageConfig",
       "isBoss": false
     },
@@ -78,7 +78,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "Both ConfigMaps and Secrets are read-only when mounted as volumes — writeability is not what distinguishes them. The real differences are RBAC defaults, base64 encoding, and intended use (sensitive vs non-sensitive data)."
       ],
       "tip": "Go tip: Use viper or envconfig library to load config from both env vars (from ConfigMaps) and files (from Secrets). This makes local development (no k8s) and production (with k8s) work seamlessly.",
-      "deepDive": "RBAC tip: Grant read access to ConfigMaps broadly, but lock down Secret access tightly. Use separate ServiceAccounts per deployment so a compromised service can't read Secrets it doesn't need.",
+      "deepDive": "RBAC tip: Grant read access to ConfigMaps broadly, but lock down Secret access tightly. Use separate ServiceAccounts per deployment so a compromised service can't read Secrets it doesn't need.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/concepts/configuration/configmap/\n- https://kubernetes.io/docs/concepts/configuration/secret/\n- https://kubernetes.io/docs/reference/access-authn-authz/rbac/",
       "groupId": "storageConfig",
       "isBoss": false
     },
@@ -101,7 +101,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "downwardAPI volumes expose pod metadata (labels, annotations, resource limits) as read-only files — they cannot be used for scratch writes. There is no 'writable flag' for downwardAPI volumes."
       ],
       "tip": "Go tip: os.TempDir() in a container returns /tmp, which may be on the container layer (slow). Mount emptyDir at /tmp in your pod spec for faster temp file I/O: volumeMounts: [{name: tmp, mountPath: /tmp}]",
-      "deepDive": "For emptyDir with Memory backend: it counts against the container's memory limit. If your Go service writes 500MB to tmpfs but your memory limit is 512Mi, you'll OOMKill. Account for this in your resource limits.",
+      "deepDive": "For emptyDir with Memory backend: it counts against the container's memory limit. If your Go service writes 500MB to tmpfs but your memory limit is 512Mi, you'll OOMKill. Account for this in your resource limits.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/concepts/storage/volumes/#emptydir\n- https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/",
       "groupId": "storageConfig",
       "isBoss": false
     },
@@ -131,10 +131,10 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "-n",
         "staging"
       ],
-      "explain": "kubectl create secret generic creates a generic Secret. --from-literal=key=value sets key-value pairs directly. The value is automatically base64-encoded by k8s.",
+      "explain": "`kubectl create secret` needs a Secret type after it. `generic` means you are creating a normal arbitrary key-value Secret, not a special built-in type like `docker-registry` or `tls`. In this question you just need to store a custom key called `password`, so `generic` is the correct subtype. `--from-literal=key=value` sets that key-value pair directly, and Kubernetes stores the value base64-encoded.",
       "wrongReasons": [],
       "tip": "Never commit Secret values to Git! Use --from-file=password=/path/to/file for file-based secrets. In CI/CD, inject values from your secret manager (Vault, AWS SM) at deploy time.",
-      "deepDive": "Alternatives to kubectl create secret: Sealed Secrets (encrypted YAML safe for Git), External Secrets Operator (syncs from AWS/GCP/Vault), or Helm secrets plugin. All are better than storing raw Secrets in version control.",
+      "deepDive": "Alternatives to kubectl create secret: Sealed Secrets (encrypted YAML safe for Git), External Secrets Operator (syncs from AWS/GCP/Vault), or Helm secrets plugin. All are better than storing raw Secrets in version control.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/tasks/configmap-secret/managing-secret-using-kubectl/\n- https://kubernetes.io/docs/concepts/configuration/secret/",
       "groupId": "storageConfig",
       "isBoss": false
     },
@@ -157,7 +157,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "While this pattern works, it adds significant complexity: S3 credentials management, init container failure handling, network dependency at startup, and no version coupling between config and Deployment. ConfigMaps are the native, declarative solution that keeps config in the cluster."
       ],
       "tip": "Go tip: Use viper.SetConfigFile(\"/etc/app/config.yaml\") for file-based config. Combine with viper.WatchConfig() to pick up ConfigMap changes without restarting.",
-      "deepDive": "When a ConfigMap is mounted as a volume, Kubernetes uses symbolic links internally. On update, it atomically swaps the symlink target so your app sees a consistent snapshot. The update delay is typically under 60 seconds (configurable via kubelet sync period). Note: subPath mounts do NOT receive automatic updates.",
+      "deepDive": "When a ConfigMap is mounted as a volume, Kubernetes uses symbolic links internally. On update, it atomically swaps the symlink target so your app sees a consistent snapshot. The update delay is typically under 60 seconds (configurable via kubelet sync period). Note: subPath mounts do NOT receive automatic updates.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/concepts/configuration/configmap/\n- https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/",
       "groupId": "storageConfig",
       "isBoss": false
     },
@@ -189,7 +189,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
       "explain": "`kubectl create configmap --from-file` creates a ConfigMap with the file name as the key and file contents as the value. For config.yaml, the resulting key is 'config.yaml' inside the ConfigMap data.",
       "wrongReasons": [],
       "tip": "Use --from-file=custom-key=config.yaml to override the key name. Use --from-env-file for .env-style key=value files that should become individual ConfigMap entries.",
-      "deepDive": "For GitOps workflows, define ConfigMaps in YAML manifests and use `kubectl apply`. The imperative `create` command is useful for one-off setups or scripts, but declarative YAML in Git is the production standard for traceability and reproducibility.",
+      "deepDive": "For GitOps workflows, define ConfigMaps in YAML manifests and use `kubectl apply`. The imperative `create` command is useful for one-off setups or scripts, but declarative YAML in Git is the production standard for traceability and reproducibility.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/\n- https://kubernetes.io/docs/tasks/manage-kubernetes-objects/declarative-config/",
       "groupId": "storageConfig",
       "isBoss": false
     },
@@ -204,7 +204,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "Use volumes instead — env vars can't read from ConfigMaps"
       ],
       "answer": 0,
-      "explain": "`env.valueFrom.configMapKeyRef` injects a single specific key as an env var with a name you control. `envFrom` imports ALL keys from the ConfigMap, which is convenient but gives you less control over naming and can pollute the env with unexpected variables.",
+      "explain": "`env.valueFrom.configMapKeyRef` injects a single specific key as an env var with a name you control. `envFrom` imports ALL keys from the ConfigMap, which is convenient but gives you less control over naming and can pollute the env with unexpected variables. Kubernetes needs both `name` and `key` here for the same reason a file lookup needs both a file name and a field inside it: `name` tells Kubernetes which ConfigMap to read (`app-config`), and `key` tells it which exact entry inside that ConfigMap to inject (`log_level`). A namespace can have many ConfigMaps, and each ConfigMap can hold many key-value pairs, so both fields are required.",
       "wrongReasons": [
         null,
         "envFrom imports ALL keys, which is useful but not what the question asks. Use envFrom when the ConfigMap is designed as a complete env set. For selective injection, use valueFrom.",
@@ -212,7 +212,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "ConfigMaps absolutely can be used as env var sources. This is one of the two main consumption methods (the other being volume mounts)."
       ],
       "tip": "Go tip: Use os.Getenv(\"LOG_LEVEL\") with a sensible default: level := os.Getenv(\"LOG_LEVEL\"); if level == \"\" { level = \"info\" }. This makes your app work both inside and outside k8s.",
-      "deepDive": "Key difference: env vars from ConfigMaps are set at pod creation time and do NOT update when the ConfigMap changes. You must restart the pod to pick up new values. Volume-mounted ConfigMaps update automatically (within ~60s). Choose your method based on whether hot-reload matters.",
+      "deepDive": "Key difference: env vars from ConfigMaps are set at pod creation time and do NOT update when the ConfigMap changes. You must restart the pod to pick up new values. Volume-mounted ConfigMaps update automatically (within ~60s). Choose your method based on whether hot-reload matters.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/\n- https://kubernetes.io/docs/tutorials/configuration/updating-configuration-via-a-configmap/",
       "groupId": "storageConfig",
       "isBoss": false
     },
@@ -235,7 +235,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "Volume-mounted ConfigMaps sync within about 60 seconds. There is no 24-hour delay. The issue here is env var injection, which never syncs."
       ],
       "tip": "Go tip: For hot-reloadable config, mount ConfigMaps as files and use fsnotify or viper.WatchConfig() to detect changes without pod restarts.",
-      "deepDive": "This is one of the most common config-related surprises. Env vars are snapshots from pod creation. Volume mounts use kubelet sync (default ~60s). For critical config changes, `kubectl rollout restart deployment/<name>` forces all pods to recreate and pick up new env values. In GitOps, a config change should trigger a pod rollout automatically.",
+      "deepDive": "This is one of the most common config-related surprises. Env vars are snapshots from pod creation. Volume mounts use kubelet sync (default ~60s). For critical config changes, `kubectl rollout restart deployment/<name>` forces all pods to recreate and pick up new env values. In GitOps, a config change should trigger a pod rollout automatically.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/tutorials/configuration/updating-configuration-via-a-configmap/\n- https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#rollout",
       "groupId": "storageConfig",
       "isBoss": false
     },
@@ -258,7 +258,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "ConfigMaps are for configuration data, not application-generated data. They are read-only when mounted and have a 1MB size limit."
       ],
       "tip": "Go tip: For embedded databases (SQLite, BoltDB), mount a PVC at the data directory. Use os.MkdirAll to handle first-run when the directory is empty.",
-      "deepDive": "PVCs are bound to PersistentVolumes (PVs) provisioned by a StorageClass. Most cloud providers support dynamic provisioning — you create a PVC and the cloud automatically creates a disk. Access modes matter: ReadWriteOnce (single node), ReadOnlyMany (multiple nodes read), ReadWriteMany (multiple nodes read/write, requires NFS or similar).",
+      "deepDive": "PVCs are bound to PersistentVolumes (PVs) provisioned by a StorageClass. Most cloud providers support dynamic provisioning — you create a PVC and the cloud automatically creates a disk. Access modes matter: ReadWriteOnce (single node), ReadOnlyMany (multiple nodes read), ReadWriteMany (multiple nodes read/write, requires NFS or similar).\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/concepts/storage/persistent-volumes/\n- https://kubernetes.io/docs/concepts/storage/storage-classes/",
       "groupId": "storageConfig",
       "isBoss": false
     },
@@ -281,7 +281,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "BlueGreen is not a built-in Kubernetes Deployment strategy (it's a deployment pattern implemented with two separate Deployments). It's powerful but requires more infra setup (two full environments)."
       ],
       "tip": "Go tip: Implement graceful shutdown! When k8s sends SIGTERM, your Go server has terminationGracePeriodSeconds (default 30s) to finish in-flight requests. Use http.Server.Shutdown(ctx) with a timeout context.",
-      "deepDive": "// Graceful shutdown in Go:\nsrv := &http.Server{Addr: \":8080\", Handler: mux}\ngo srv.ListenAndServe()\n<-sigChan // wait for SIGTERM\nctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)\ndefer cancel()\nsrv.Shutdown(ctx) // finish in-flight requests",
+      "deepDive": "// Graceful shutdown in Go:\nsrv := &http.Server{Addr: \":8080\", Handler: mux}\ngo srv.ListenAndServe()\n<-sigChan // wait for SIGTERM\nctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)\ndefer cancel()\nsrv.Shutdown(ctx) // finish in-flight requests\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/concepts/workloads/controllers/deployment/\n- https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-termination",
       "groupId": "deploymentsRollouts",
       "isBoss": false
     },
@@ -304,7 +304,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "Deployments create ReplicaSets automatically. You never need to create them by hand. If you see ReplicaSets in kubectl get rs, they were created by a Deployment."
       ],
       "tip": "Go tip: Use `kubectl get rs -o wide` to see which ReplicaSet owns which image version. This helps trace which revision is currently serving traffic during a rollout.",
-      "deepDive": "The Deployment controller keeps old ReplicaSets (scaled to 0) as rollback points. `revisionHistoryLimit` (default 10) controls how many are retained. Use `kubectl rollout history deployment/<name>` to see revisions and `kubectl rollout undo --to-revision=N` to revert to a specific one.",
+      "deepDive": "The Deployment controller keeps old ReplicaSets (scaled to 0) as rollback points. `revisionHistoryLimit` (default 10) controls how many are retained. Use `kubectl rollout history deployment/<name>` to see revisions and `kubectl rollout undo --to-revision=N` to revert to a specific one.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/concepts/workloads/controllers/deployment/\n- https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/",
       "groupId": "deploymentsRollouts",
       "isBoss": false
     },
@@ -327,7 +327,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "This is backwards. apply creates the resource if it doesn't exist — that's the whole point of declarative management. It handles both creation and updates idempotently, which is why it's the CI/CD and GitOps standard."
       ],
       "tip": "Go tip: In CI/CD pipelines, always use `kubectl apply -f` so deployments are idempotent. If the pipeline reruns (retries), apply won't fail on existing resources.",
-      "deepDive": "Under the hood, `apply` uses a three-way merge: it compares the new manifest, the last-applied annotation, and the live cluster state to compute a minimal patch. This is why `apply` adds the `kubectl.kubernetes.io/last-applied-configuration` annotation. For GitOps tools (ArgoCD, Flux), this declarative model is the foundation — Git is the source of truth, and the tool continuously applies desired state.",
+      "deepDive": "Under the hood, `apply` uses a three-way merge: it compares the new manifest, the last-applied annotation, and the live cluster state to compute a minimal patch. This is why `apply` adds the `kubectl.kubernetes.io/last-applied-configuration` annotation. For GitOps tools (ArgoCD, Flux), this declarative model is the foundation — Git is the source of truth, and the tool continuously applies desired state.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/tasks/manage-kubernetes-objects/declarative-config/\n- https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#apply",
       "groupId": "deploymentsRollouts",
       "isBoss": false
     },
@@ -350,7 +350,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "Recreate kills ALL pods first — this makes the problem much worse, causing full downtime instead of intermittent resets."
       ],
       "tip": "Go tip: Use signal.NotifyContext(ctx, syscall.SIGTERM) and http.Server.Shutdown(ctx) with a 25s timeout (leave 5s buffer under the default 30s terminationGracePeriodSeconds).",
-      "deepDive": "Full zero-downtime recipe: (1) readinessProbe gates traffic, (2) preStop hook adds a brief sleep (2-5s) so endpoints propagate removal before shutdown begins, (3) app catches SIGTERM and drains connections, (4) terminationGracePeriodSeconds is long enough for the drain. The preStop sleep is critical because endpoint removal is asynchronous — without it, new requests can arrive after SIGTERM.",
+      "deepDive": "Full zero-downtime recipe: (1) readinessProbe gates traffic, (2) preStop hook adds a brief sleep (2-5s) so endpoints propagate removal before shutdown begins, (3) app catches SIGTERM and drains connections, (4) terminationGracePeriodSeconds is long enough for the drain. The preStop sleep is critical because endpoint removal is asynchronous — without it, new requests can arrive after SIGTERM.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-termination\n- https://kubernetes.io/docs/concepts/containers/container-lifecycle-hooks/\n- https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/",
       "groupId": "deploymentsRollouts",
       "isBoss": false
     },
@@ -382,7 +382,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
       "explain": "`kubectl set image` updates the container image in a Deployment, triggering a rolling update. The format is `container-name=image:tag`. This is the fastest imperative way to deploy a new version.",
       "wrongReasons": [],
       "tip": "After set image, immediately run `kubectl rollout status deployment/api-server -n production` to watch convergence. If it stalls, `kubectl rollout undo` reverts to the previous revision.",
-      "deepDive": "In production, prefer `kubectl apply -f` with an updated manifest in Git over `set image`. Imperative image updates are useful for emergencies but drift from GitOps source of truth. If you use imperative changes, commit the manifest update to Git immediately after to prevent ArgoCD/Flux from reverting your change.",
+      "deepDive": "In production, prefer `kubectl apply -f` with an updated manifest in Git over `set image`. Imperative image updates are useful for emergencies but drift from GitOps source of truth. If you use imperative changes, commit the manifest update to Git immediately after to prevent ArgoCD/Flux from reverting your change.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#set\n- https://kubernetes.io/docs/concepts/workloads/controllers/deployment/",
       "groupId": "deploymentsRollouts",
       "isBoss": false
     },
@@ -413,7 +413,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
       "explain": "`kubectl rollout undo` reverts a Deployment to its previous ReplicaSet revision. Kubernetes scales up the old ReplicaSet and scales down the current one using the same rolling update strategy.",
       "wrongReasons": [],
       "tip": "Add `--to-revision=N` to roll back to a specific revision, not just the previous one. Use `kubectl rollout history deployment/api-server` to see available revisions first.",
-      "deepDive": "Rollback creates a new revision (it doesn't rewind history). The old ReplicaSet is reused, so it's fast — no image pull needed if the node already has it cached. For GitOps, also revert the commit in Git to keep source of truth aligned with cluster state.",
+      "deepDive": "Rollback creates a new revision (it doesn't rewind history). The old ReplicaSet is reused, so it's fast — no image pull needed if the node already has it cached. For GitOps, also revert the commit in Git to keep source of truth aligned with cluster state.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/concepts/workloads/controllers/deployment/\n- https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#rollout",
       "groupId": "deploymentsRollouts",
       "isBoss": false
     },
@@ -444,7 +444,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
       "explain": "`kubectl rollout restart` triggers a graceful rolling restart by adding a timestamp annotation to the pod template. New pods are created and old ones terminated following the Deployment's update strategy — no downtime with RollingUpdate.",
       "wrongReasons": [],
       "tip": "This is the safest way to refresh env-var-based config. Never scale to 0 and back up — that causes full downtime.",
-      "deepDive": "Under the hood, `rollout restart` patches the pod template with a `kubectl.kubernetes.io/restartedAt` annotation. This triggers the Deployment controller to create a new ReplicaSet and perform a standard rolling update. It respects maxSurge and maxUnavailable settings.",
+      "deepDive": "Under the hood, `rollout restart` patches the pod template with a `kubectl.kubernetes.io/restartedAt` annotation. This triggers the Deployment controller to create a new ReplicaSet and perform a standard rolling update. It respects maxSurge and maxUnavailable settings.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#rollout\n- https://kubernetes.io/docs/concepts/workloads/controllers/deployment/",
       "groupId": "deploymentsRollouts",
       "isBoss": false
     },
@@ -467,7 +467,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "Waiting lets the rollout finish replacing all old pods with broken ones, potentially increasing error rate to 100%. Act fast to preserve the remaining healthy v2 pods."
       ],
       "tip": "Go tip: After rollback, review what caused the failure. Check probe endpoints, startup logs, and config diffs between v2 and v3 before retrying.",
-      "deepDive": "For safer deploys, set `progressDeadlineSeconds` (default 600s) so k8s automatically marks a rollout as Failed if it doesn't converge in time. Pair with monitoring alerts on rollout status and error rate. In GitOps, revert the Git commit to prevent the controller from re-applying the bad version.",
+      "deepDive": "For safer deploys, set `progressDeadlineSeconds` (default 600s) so k8s automatically marks a rollout as Failed if it doesn't converge in time. Pair with monitoring alerts on rollout status and error rate. In GitOps, revert the Git commit to prevent the controller from re-applying the bad version.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/concepts/workloads/controllers/deployment/\n- https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#rollout",
       "groupId": "deploymentsRollouts",
       "isBoss": false
     },
@@ -490,7 +490,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "The kubelet is working correctly — it's reporting that the requested ConfigMap doesn't exist. The fix is at the application manifest level, not the node level."
       ],
       "tip": "Go tip: Use `optional: true` on ConfigMap/Secret volume references for non-critical config so pods can start even if the ConfigMap is temporarily missing.",
-      "deepDive": "This commonly happens when ConfigMap/Secret names include version suffixes and someone deploys a new version without creating the matching config first. In CI/CD, always create ConfigMaps and Secrets BEFORE applying the Deployment that references them. Helm and Kustomize handle this ordering automatically.",
+      "deepDive": "This commonly happens when ConfigMap/Secret names include version suffixes and someone deploys a new version without creating the matching config first. In CI/CD, always create ConfigMaps and Secrets BEFORE applying the Deployment that references them. Helm and Kustomize handle this ordering automatically.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/\n- https://kubernetes.io/docs/concepts/configuration/secret/\n- https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/",
       "groupId": "storageConfig",
       "isBoss": false
     },
@@ -513,7 +513,7 @@ window.KUBECRAFT_LEVEL_DATA.push({
         "RBAC issues would prevent the Deployment controller from creating pods at all, or would appear as error events in kubectl describe deployment. Pods reaching Running state means the controller works fine."
       ],
       "tip": "Go tip: Your /readyz endpoint should return 200 only when the app is truly ready: DB connected, caches warm, config loaded. During startup, return 503 until everything is initialized.",
-      "deepDive": "Debug steps: (1) kubectl describe pod <new-pod> — look at \"Readiness\" probe status in Events. (2) kubectl exec <pod> -- curl -v localhost:8080/readyz — test the probe endpoint directly. (3) Check if new version has different startup time needing initialDelaySeconds adjustment.",
+      "deepDive": "Debug steps: (1) kubectl describe pod <new-pod> — look at \"Readiness\" probe status in Events. (2) kubectl exec <pod> -- curl -v localhost:8080/readyz — test the probe endpoint directly. (3) Check if new version has different startup time needing initialDelaySeconds adjustment.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/\n- https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/",
       "groupId": "deploymentsRollouts",
       "isBoss": true
     }

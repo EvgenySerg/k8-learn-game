@@ -11,7 +11,26 @@
   <header>
     <div class="logo">⎈ KubeCraft</div>
     <h1>Kubernetes<br>Mission Control</h1>
-    <div class="subtitle" id="campaign-subtitle">// loading campaign...</div>
+    <div class="subtitle" id="campaign-subtitle"></div>
+    <div class="campaign-actions">
+      <div class="quick-menu" id="quick-menu">
+        <button
+          class="btn-inline btn-menu-toggle"
+          id="menu-toggle-btn"
+          onclick="toggleQuickMenu(event)"
+          aria-haspopup="true"
+          aria-expanded="false"
+          aria-label="Open actions menu"
+        >
+          ☰
+        </button>
+        <div class="quick-menu-panel" id="quick-menu-panel">
+          <button class="quick-menu-item" onclick="openRunHistory()">
+            Runs History
+          </button>
+        </div>
+      </div>
+    </div>
   </header>
 
   <div class="hud">
@@ -34,6 +53,16 @@
     <div class="hud-item">
       <div class="hud-label">Jump To</div>
       <select class="hud-select" id="level-select" aria-label="Jump to level"></select>
+      <div class="mode-inline">
+        <div class="mode-toggle" role="group" aria-label="Challenge mode">
+          <button class="mode-toggle-btn" id="mode-main-btn" type="button" onclick="setChallengeMode('main')" aria-pressed="true">
+            Main
+          </button>
+          <button class="mode-toggle-btn" id="mode-typed-btn" type="button" onclick="setChallengeMode('typed')" aria-pressed="false">
+            Typed
+          </button>
+        </div>
+      </div>
     </div>
     <div class="hud-item">
       <div class="hud-label">Question</div>

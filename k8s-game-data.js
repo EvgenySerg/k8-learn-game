@@ -53,6 +53,10 @@ window.KUBECRAFT_GROUP_CATALOG = {
     label: 'Cluster Architecture',
     tags: ['control-plane', 'kubelet', 'etcd', 'architecture']
   },
+  kubectlCli: {
+    label: 'kubectl & CLI Grammar',
+    tags: ['kubectl', 'cli', 'grammar', 'commands']
+  },
   policyGovernance: {
     label: 'Policy & Governance',
     tags: ['opa', 'kyverno', 'compliance', 'governance']

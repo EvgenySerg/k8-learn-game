@@ -5,14 +5,15 @@ window.KUBECRAFT_LEVEL_DATA.push({
   "difficulty": "Absolute Beginner",
   "badgeIcon": "🚀",
   "badgeName": "Mission Ready",
-  "description": "Learn the building blocks of Kubernetes: clusters, nodes, pods, containers, services, deployments, namespaces, and your primary tool — kubectl.",
+  "description": "Learn the building blocks of Kubernetes: clusters, nodes, pods, containers, services, deployments, namespaces, and your primary tool — kubectl, including how to read its command grammar.",
   "status": "active",
   "shuffleQuestions": false,
-  "targetQuestionCount": 15,
+  "targetQuestionCount": 21,
   "focus": [
     "Cluster Architecture",
     "Pods & Workloads",
-    "Services & Networking"
+    "Services & Networking",
+    "kubectl CLI Grammar"
   ],
   "questions": [
     {
@@ -220,6 +221,144 @@ window.KUBECRAFT_LEVEL_DATA.push({
       "tip": "Go tip: kubectl reads its config from ~/.kube/config, which specifies cluster addresses and credentials. Use `kubectl config get-contexts` to see available clusters and `kubectl config use-context <name>` to switch.",
       "deepDive": "kubectl communicates with the kube-apiserver over HTTPS. The API server authenticates the request, checks RBAC authorization, validates the resource spec, and stores the result in etcd. All other components (scheduler, controllers, kubelet) watch the API server for changes — kubectl is just one of many API clients.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/reference/kubectl/\n- https://kubernetes.io/docs/reference/kubectl/quick-reference/",
       "groupId": "clusterArchitecture",
+      "isBoss": false
+    },
+    {
+      "type": "quiz",
+      "q": "What is the best mental model for reading most kubectl commands?",
+      "context": "kubectl get pods -n production\nkubectl describe service checkout -n production\nkubectl rollout status deployment/checkout-api -n production\n\n# Different commands, same general grammar underneath.",
+      "options": [
+        "kubectl <cluster> <node> <pod> [flags]",
+        "kubectl <verb> <resource> [flags], and sometimes <verb> is really <group> <subcommand>",
+        "kubectl <namespace> <resource> <verb> [flags]",
+        "kubectl <file> <action> <resource> [flags]"
+      ],
+      "answer": 1,
+      "explain": "The most useful beginner model is: `kubectl <verb> <resource> [flags]`. Many commands fit that shape directly, such as `get`, `describe`, `logs`, and `scale`. Some use one extra layer: `kubectl <group> <subcommand> <resource> [flags]`, such as `rollout status`. Read commands from left to right: action first, target second, flags around the edges.",
+      "wrongReasons": [
+        "kubectl does not require you to name cluster, node, and pod in that fixed order. Those are different concepts, and many kubectl commands never mention a node at all.",
+        null,
+        "Namespace is usually expressed as a flag like `-n production`, not as the first positional part of the command grammar.",
+        "Some commands use files (`apply -f`), but files are not the universal kubectl grammar. Most everyday commands target API resources directly."
+      ],
+      "tip": "Go tip: If you build internal platform CLIs in Go, this same left-to-right mental model makes wrappers easier to design and easier for engineers to memorize.",
+      "deepDive": "kubectl is a command tree. Some entries are direct actions (`get`, `describe`, `scale`), while others are command groups (`rollout`, `auth`, `config`). Once you recognize that tree, unfamiliar commands become much easier to decode during incidents.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/reference/kubectl/\n- https://kubernetes.io/docs/reference/kubectl/quick-reference/",
+      "groupId": "kubectlCli",
+      "isBoss": false
+    },
+    {
+      "type": "quiz",
+      "q": "In `kubectl rollout status deployment/checkout-api -n production`, what role does `rollout` play?",
+      "context": "# Break the command into pieces:\n# kubectl | rollout | status | deployment/checkout-api | -n production",
+      "options": [
+        "It is the resource type being inspected",
+        "It is a command group that contains subcommands like status, history, restart, and undo",
+        "It is the namespace selector",
+        "It is a required prefix for every Deployment command"
+      ],
+      "answer": 1,
+      "explain": "`rollout` is a command group, not the final action. The real action here is `status`. That is why the grammar is `kubectl rollout status <resource> [flags]` rather than `kubectl status rollout ...`.",
+      "wrongReasons": [
+        "The resource type here is `deployment`. `rollout` tells kubectl which family of rollout-related actions you want to use.",
+        null,
+        "Namespace is selected by `-n production`. `rollout` has nothing to do with namespace targeting.",
+        "Many Deployment operations do not use `rollout` at all. For example: `kubectl get deployment`, `kubectl scale deployment`, and `kubectl describe deployment`."
+      ],
+      "tip": "Go tip: Many Go CLI frameworks, including Cobra, model commands exactly this way: a root command with nested subcommands under it.",
+      "deepDive": "The `rollout` group exists because rollouts have multiple related actions: inspect progress (`status`), see revisions (`history`), restart workloads (`restart`), and revert (`undo`). Grouping these operations keeps kubectl consistent instead of inventing a separate top-level verb for each rollout action.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#rollout\n- https://kubernetes.io/docs/concepts/workloads/controllers/deployment/",
+      "groupId": "kubectlCli",
+      "isBoss": false
+    },
+    {
+      "type": "quiz",
+      "q": "What does `deployment/checkout-api` mean in a kubectl command?",
+      "context": "# Example:\n# kubectl rollout status deployment/checkout-api -n production",
+      "options": [
+        "It is a shorthand that combines resource type and resource name into one argument",
+        "It means the namespace is `deployment` and the pod name is `checkout-api`",
+        "It is a path to a YAML file stored on disk",
+        "It is the API group and version for the resource"
+      ],
+      "answer": 0,
+      "explain": "`deployment/checkout-api` is a compact resource reference: type = `deployment`, name = `checkout-api`. In many kubectl commands it is equivalent to writing the two pieces separately as `deployment checkout-api`.",
+      "wrongReasons": [
+        null,
+        "Namespaces are specified separately, usually with `-n <namespace>`. `deployment` here is the resource type, not a namespace.",
+        "kubectl file paths are typically passed with flags like `-f deployment.yaml`. `deployment/checkout-api` is an object reference, not a local file path.",
+        "API group and version look like `apps/v1`, not `deployment/checkout-api`."
+      ],
+      "tip": "Go tip: Learn to spot the pattern `TYPE/NAME`. It appears often in incident runbooks because it is compact and easy to scan quickly.",
+      "deepDive": "Both resource-addressing styles are common in real operations:\n- combined form: `deployment/checkout-api`\n- separate form: `deployment checkout-api`\n\nYou should be comfortable reading both instantly. The slash form is especially common in rollout commands, restart commands, and examples copied from docs or CI logs.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/reference/kubectl/quick-reference/\n- https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#rollout",
+      "groupId": "kubectlCli",
+      "isBoss": false
+    },
+    {
+      "type": "scenario",
+      "q": "A teammate rewrites a command during an incident. Which command is equivalent to `kubectl rollout status deployment/checkout-api -n production`?",
+      "context": "# Same action, different resource-addressing style.\n# Pick the rewrite that means the same thing.",
+      "options": [
+        "kubectl rollout status deployment checkout-api -n production",
+        "kubectl status rollout deployment checkout-api -n production",
+        "kubectl deployment rollout status checkout-api -n production",
+        "kubectl rollout deployment/status checkout-api -n production"
+      ],
+      "answer": 0,
+      "explain": "`kubectl rollout status deployment checkout-api -n production` is equivalent. It uses the separate resource-addressing style (`TYPE NAME`) instead of the combined shorthand (`TYPE/NAME`).",
+      "wrongReasons": [
+        null,
+        "kubectl does not invert the command tree like `status rollout`. The group comes first, then the subcommand: `rollout status`.",
+        "The resource type does not come before the command group. kubectl expects the action path first, then the resource being targeted.",
+        "There is no `deployment/status` resource form here. `status` is the rollout subcommand, not part of the resource identifier."
+      ],
+      "tip": "Go tip: Normalize equivalent commands mentally. During incidents, people will paste commands in different styles, and you need to recognize sameness immediately.",
+      "deepDive": "This equivalence matters operationally because logs, dashboards, docs, and shell history will mix both styles. If you only understand one form, you'll hesitate at exactly the wrong time. Strong operators learn to translate both forms automatically.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#rollout\n- https://kubernetes.io/docs/reference/kubectl/quick-reference/",
+      "groupId": "kubectlCli",
+      "isBoss": false
+    },
+    {
+      "type": "scenario",
+      "q": "Why is `kubectl scale deployment api-gateway --replicas=5 -n production` shaped differently from `kubectl rollout status deployment/checkout-api -n production`?",
+      "context": "# One command starts with `scale`.\n# The other starts with `rollout status`.\n# Why?",
+      "options": [
+        "`scale` only works in the production namespace, so it has special grammar",
+        "`scale` is already a top-level action verb, while `rollout` is a command group and `status` is the action inside it",
+        "`rollout` is deprecated, so it keeps the old grammar",
+        "`scale` only works on Deployments, while rollout works on every Kubernetes object"
+      ],
+      "answer": 1,
+      "explain": "`scale` is a direct action command, so it appears immediately after `kubectl`. By contrast, `rollout` is a group of related actions, and `status` is the specific action you want inside that group. That is why one command is `kubectl scale ...` and the other is `kubectl rollout status ...`.",
+      "wrongReasons": [
+        "Namespace selection uses `-n`, not special command grammar. Both commands can target any namespace you have access to.",
+        null,
+        "`rollout` is an active and important kubectl command group. It is used constantly for progress checks, restarts, history inspection, and rollback.",
+        "`scale` is not limited to Deployments. It can target several scalable workload resources. The grammar difference is about command structure, not resource support."
+      ],
+      "tip": "Go tip: Treat command groups like packages and subcommands like functions. That mental model helps when learning large CLIs.",
+      "deepDive": "A practical rule: if the first word after `kubectl` sounds like a broad area (`rollout`, `config`, `auth`), expect another subcommand next. If it sounds like a single clear action (`get`, `describe`, `scale`, `logs`), it is usually already the final verb.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#rollout\n- https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#scale",
+      "groupId": "kubectlCli",
+      "isBoss": false
+    },
+    {
+      "type": "quiz",
+      "q": "Which statement about placing `-n production` in kubectl commands is correct?",
+      "context": "# These are commonly seen styles:\n# kubectl -n production scale deployment api-gateway --replicas=5\n# kubectl scale -n production deployment api-gateway --replicas=5\n# kubectl scale deployment api-gateway --replicas=5 -n production",
+      "options": [
+        "It must always be the final token in the command",
+        "It must always come immediately after `kubectl`",
+        "It can usually appear in several places after `kubectl`; teams choose a readable style",
+        "It only works with `get` and `describe`, not with actions like `scale` or `rollout`"
+      ],
+      "answer": 2,
+      "explain": "`-n production` is a namespace flag, and kubectl generally accepts it in multiple positions after `kubectl`. Teams often standardize on one style for readability, but the important skill is being able to read all common forms correctly.",
+      "wrongReasons": [
+        "Many engineers place `-n` at the end, but that is a style choice, not a parser requirement.",
+        "Placing `-n` right after `kubectl` is also valid, but it is not mandatory.",
+        null,
+        "Namespace targeting works with many kubectl commands, including `get`, `logs`, `describe`, `scale`, `rollout`, and more."
+      ],
+      "tip": "Go tip: To reduce mistakes, set your current context's default namespace with `kubectl config set-context --current --namespace=production` when doing focused work.",
+      "deepDive": "You should still be consistent on your team. Mixed but valid syntax is fine for the parser, yet standard command style makes reviews, runbooks, and incident collaboration faster. The real operational risk is not where `-n` sits in the command; it is forgetting namespace selection entirely and changing the wrong environment.\n\nOfficial Kubernetes docs:\n- https://kubernetes.io/docs/reference/kubectl/quick-reference/\n- https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/",
+      "groupId": "kubectlCli",
       "isBoss": false
     },
     {

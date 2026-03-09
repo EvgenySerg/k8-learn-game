@@ -13,6 +13,19 @@ const COMMAND_PLACEHOLDER = '<span class="cmd-placeholder">click tokens below to
 const ENABLE_JOURNEY_GAMIFICATION = false;
 const DAILY_HIT_RATIO_STORAGE_KEY = 'kubecraft_daily_hit_ratio_v1';
 const DAILY_WEAK_HIT_RATIO_THRESHOLD = 0.7;
+const RUN_HISTORY_STORAGE_KEY = 'kubecraft_run_history_v1';
+const LEGACY_TYPED_RUN_HISTORY_STORAGE_KEY = 'kubecraft_typed_run_history_v1';
+const RUN_HISTORY_LIMIT = 300;
+const CHALLENGE_MODE_MAIN = 'main';
+const CHALLENGE_MODE_TYPED = 'typed';
+const DEFAULT_CHALLENGE_CONFIG = Object.freeze({
+  typedPickCount: 20,
+  regularCommandPickCount: 6,
+  baseQuestionTimeSec: 40
+});
+const QUESTION_SHORT_ID_LENGTH = 3;
+const QUESTION_SHORT_ID_RADIX = 36;
+const MAX_QUESTION_SHORT_IDS = QUESTION_SHORT_ID_RADIX ** QUESTION_SHORT_ID_LENGTH;
 const JOURNEY_ICONS = {
   knight: `
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -109,11 +122,133 @@ function inferDynamicTags(question) {
   return tags;
 }
 
-function normalizeQuestion(question, level, levelQuestionIndex, sourceIndex, hasExplicitBoss) {
+function normalizeChallengeConfig(config) {
+  const raw = (config && typeof config === 'object') ? config : {};
+  const typedPickCount = Number.isFinite(raw.typedPickCount)
+    ? Math.max(1, Math.floor(raw.typedPickCount))
+    : DEFAULT_CHALLENGE_CONFIG.typedPickCount;
+  const regularCommandPickCount = Number.isFinite(raw.regularCommandPickCount)
+    ? Math.max(1, Math.floor(raw.regularCommandPickCount))
+    : DEFAULT_CHALLENGE_CONFIG.regularCommandPickCount;
+  const baseQuestionTimeSec = Number.isFinite(raw.baseQuestionTimeSec)
+    ? Math.max(1, Math.floor(raw.baseQuestionTimeSec))
+    : DEFAULT_CHALLENGE_CONFIG.baseQuestionTimeSec;
+
+  return {
+    typedPickCount,
+    regularCommandPickCount,
+    baseQuestionTimeSec
+  };
+}
+
+function sanitizeQuestionRequires(requires) {
+  if (!Array.isArray(requires)) return [];
+  return Array.from(new Set(
+    requires
+      .filter(item => typeof item === 'string')
+      .map(item => item.trim())
+      .filter(Boolean)
+  ));
+}
+
+const KUBECTL_RESOURCE_ALIASES = [
+  'deployment',
+  'deploy',
+  'service',
+  'svc',
+  'pod',
+  'po',
+  'statefulset',
+  'sts',
+  'daemonset',
+  'ds',
+  'replicaset',
+  'rs',
+  'job',
+  'cronjob',
+  'cj',
+  'ingress',
+  'ing',
+  'namespace',
+  'ns',
+  'node',
+  'no',
+  'configmap',
+  'cm',
+  'secret',
+  'sa',
+  'pvc',
+  'pv'
+];
+
+const KUBECTL_RESOURCE_REF_PATTERN = new RegExp(
+  `\\b(${KUBECTL_RESOURCE_ALIASES.join('|')})\\/([a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)\\b`,
+  'gi'
+);
+
+function normalizeKubectlResourceRefs(value) {
+  if (typeof value !== 'string') return value;
+  return value.replace(KUBECTL_RESOURCE_REF_PATTERN, (_, resource, name) => `${resource} ${name}`);
+}
+
+function normalizeCommandParts(parts) {
+  if (!Array.isArray(parts)) return parts;
+
+  return parts.flatMap(part => {
+    if (typeof part !== 'string') return [];
+    const normalizedPart = normalizeKubectlResourceRefs(part).trim();
+    return normalizedPart ? normalizedPart.split(/\s+/) : [];
+  });
+}
+
+function normalizeQuestionShortId(value) {
+  if (typeof value !== 'string') return '';
+  const normalized = value.trim().toUpperCase();
+  return /^[0-9A-Z]{3}$/.test(normalized) ? normalized : '';
+}
+
+function createQuestionShortId(sourceIndex) {
+  const safeIndex = Number.isFinite(sourceIndex)
+    ? Math.max(0, Math.floor(sourceIndex))
+    : 0;
+
+  if (safeIndex >= MAX_QUESTION_SHORT_IDS) {
+    throw new Error(`Question short ID space exhausted at index ${safeIndex}.`);
+  }
+
+  return safeIndex
+    .toString(QUESTION_SHORT_ID_RADIX)
+    .toUpperCase()
+    .padStart(QUESTION_SHORT_ID_LENGTH, '0');
+}
+
+function normalizeQuestion(question, level, levelId, levelQuestionIndex, sourceIndex, hasExplicitBoss) {
+  const normalizedContent = question.type === 'command'
+    ? {
+      ...question,
+      q: normalizeKubectlResourceRefs(question.q),
+      context: normalizeKubectlResourceRefs(question.context),
+      explain: normalizeKubectlResourceRefs(question.explain),
+      tip: normalizeKubectlResourceRefs(question.tip),
+      deepDive: normalizeKubectlResourceRefs(question.deepDive),
+      wrongReasons: Array.isArray(question.wrongReasons)
+        ? question.wrongReasons.map(item => normalizeKubectlResourceRefs(item))
+        : question.wrongReasons,
+      tokens: normalizeCommandParts(question.tokens),
+      answer: Array.isArray(question.answer)
+        ? normalizeCommandParts(question.answer)
+        : normalizeKubectlResourceRefs(question.answer)
+    }
+    : question;
   const rawGroupId = typeof question.groupId === 'string' ? question.groupId : 'advancedTopics';
   const groupId = GROUP_CATALOG[rawGroupId] ? rawGroupId : 'advancedTopics';
   const group = GROUP_CATALOG[groupId] || GROUP_CATALOG.advancedTopics;
   const isBoss = Boolean(question.isBoss) || (!hasExplicitBoss && levelQuestionIndex === (level.questions || []).length - 1);
+  const questionId = (typeof question.id === 'string' && question.id.trim())
+    ? question.id.trim()
+    : `${levelId}-q-${String(levelQuestionIndex + 1).padStart(2, '0')}`;
+  const shortId = normalizeQuestionShortId(question.shortId) || createQuestionShortId(sourceIndex);
+  const requires = sanitizeQuestionRequires(question.requires);
   const tags = Array.from(new Set([
     ...(group.tags || []),
     question.type,
@@ -123,7 +258,10 @@ function normalizeQuestion(question, level, levelQuestionIndex, sourceIndex, has
   ].filter(Boolean))).slice(0, isBoss ? 8 : 7);
 
   return {
-    ...question,
+    ...normalizedContent,
+    id: questionId,
+    shortId,
+    requires,
     sourceIndex,
     uid: `q-${sourceIndex + 1}`,
     groupId,
@@ -140,12 +278,14 @@ function normalizeLevels(levelData) {
   let sourceIndex = 0;
 
   return levelData.map((level, levelPosition) => {
+    const levelId = level.id || `level-${levelPosition + 1}`;
     const rawQuestions = Array.isArray(level.questions) ? level.questions : [];
     const hasExplicitBoss = rawQuestions.some(question => Boolean(question.isBoss));
     const questions = rawQuestions.map((question, questionIndex) => {
       const normalizedQuestion = normalizeQuestion(
         question,
         level,
+        levelId,
         questionIndex,
         sourceIndex,
         hasExplicitBoss
@@ -155,7 +295,7 @@ function normalizeLevels(levelData) {
     });
 
     return {
-      id: level.id || `level-${levelPosition + 1}`,
+      id: levelId,
       title: level.title || `Level ${levelPosition + 1}`,
       difficulty: level.difficulty || 'Unspecified',
       badgeIcon: level.badgeIcon || '🏅',
@@ -167,9 +307,37 @@ function normalizeLevels(levelData) {
         ? level.targetQuestionCount
         : questions.length,
       shuffleQuestions: level.shuffleQuestions !== false,
+      challengeConfig: normalizeChallengeConfig(level.challengeConfig),
       questions
     };
   });
+}
+
+function getQuestionShortId(question) {
+  if (!question || typeof question !== 'object') return '';
+  return normalizeQuestionShortId(question.shortId);
+}
+
+function buildQuestionShortIdLookup(sourceLevels) {
+  const lookup = new Map();
+
+  sourceLevels.forEach((level, sourceLevelIndex) => {
+    (level.questions || []).forEach(question => {
+      const shortId = getQuestionShortId(question);
+      if (!shortId) return;
+      if (lookup.has(shortId)) {
+        throw new Error(`Duplicate question short ID detected: ${shortId}`);
+      }
+
+      lookup.set(shortId, {
+        sourceLevelIndex,
+        level,
+        question
+      });
+    });
+  });
+
+  return lookup;
 }
 
 function fisherYatesShuffle(arr) {
@@ -214,6 +382,53 @@ function shuffleLevelQuestions(questions) {
   });
 
   return [...result, ...boss];
+}
+
+function cloneQuestionForRun(question) {
+  return {
+    ...question,
+    options: Array.isArray(question.options) ? [...question.options] : question.options,
+    wrongReasons: Array.isArray(question.wrongReasons) ? [...question.wrongReasons] : question.wrongReasons,
+    tokens: Array.isArray(question.tokens) ? [...question.tokens] : question.tokens,
+    answer: Array.isArray(question.answer) ? [...question.answer] : question.answer,
+    requires: Array.isArray(question.requires) ? [...question.requires] : []
+  };
+}
+
+function cloneLevelForRun(level, questions) {
+  return {
+    ...level,
+    challengeConfig: normalizeChallengeConfig(level.challengeConfig),
+    questions: questions.map(cloneQuestionForRun),
+    runtime: null
+  };
+}
+
+function sampleQuestions(sourceQuestions, targetCount) {
+  if (!Array.isArray(sourceQuestions) || sourceQuestions.length === 0) return [];
+  const safeTarget = Number.isFinite(targetCount) ? Math.max(1, Math.floor(targetCount)) : sourceQuestions.length;
+  const actualPick = Math.min(safeTarget, sourceQuestions.length);
+  if (actualPick >= sourceQuestions.length) return [...sourceQuestions];
+  return fisherYatesShuffle([...sourceQuestions]).slice(0, actualPick);
+}
+
+function buildMainChallengeLevel(level) {
+  const sourceQuestions = Array.isArray(level.questions) ? level.questions : [];
+  const commandQuestions = sourceQuestions.filter(question => question.type === 'command');
+  const selectedCommands = sampleQuestions(
+    commandQuestions,
+    normalizeChallengeConfig(level.challengeConfig).regularCommandPickCount
+  );
+  const selectedCommandIds = new Set(selectedCommands.map(question => question.id));
+  const sampledQuestions = sourceQuestions.filter(question => (
+    question.type !== 'command' || selectedCommandIds.has(question.id)
+  ));
+
+  return cloneLevelForRun(level, sampledQuestions);
+}
+
+function buildMainRunLevels(playableLevels) {
+  return playableLevels.map(buildMainChallengeLevel);
 }
 
 function getLocalDateKey(date = new Date()) {
@@ -287,6 +502,104 @@ function ensureTodayHitRatioStore() {
   }
 
   return dailyHitRatioStore;
+}
+
+function sanitizeRunHistoryEntry(rawEntry) {
+  if (!rawEntry || typeof rawEntry !== 'object') return null;
+
+  const startedAtMs = Number.isFinite(rawEntry.startedAtMs)
+    ? Math.max(0, Math.floor(rawEntry.startedAtMs))
+    : Date.now();
+  const endedAtMs = Number.isFinite(rawEntry.endedAtMs)
+    ? Math.max(startedAtMs, Math.floor(rawEntry.endedAtMs))
+    : startedAtMs;
+  const answered = Number.isFinite(rawEntry.answered)
+    ? Math.max(0, Math.floor(rawEntry.answered))
+    : 0;
+  const totalQuestions = Number.isFinite(rawEntry.totalQuestions)
+    ? Math.max(0, Math.floor(rawEntry.totalQuestions))
+    : 0;
+  const correct = Number.isFinite(rawEntry.correct)
+    ? Math.max(0, Math.floor(rawEntry.correct))
+    : 0;
+  const score = Number.isFinite(rawEntry.score)
+    ? Math.floor(rawEntry.score)
+    : 0;
+  const longestStreak = Number.isFinite(rawEntry.longestStreak)
+    ? Math.max(0, Math.floor(rawEntry.longestStreak))
+    : 0;
+  const accuracy = answered > 0
+    ? Math.min(100, Math.max(0, Math.round((correct / answered) * 100)))
+    : 0;
+  const mode = rawEntry.mode === CHALLENGE_MODE_MAIN
+    ? CHALLENGE_MODE_MAIN
+    : CHALLENGE_MODE_TYPED;
+  const normalizedOutcome = ['complete', 'failed', 'aborted'].includes(rawEntry.outcome)
+    ? rawEntry.outcome
+    : 'complete';
+
+  return {
+    mode,
+    startedAtMs,
+    endedAtMs,
+    levelId: String(rawEntry.levelId || ''),
+    levelTitle: String(rawEntry.levelTitle || 'Unknown level'),
+    levelDifficulty: String(rawEntry.levelDifficulty || ''),
+    score,
+    correct: Math.min(correct, answered),
+    answered: Math.min(answered, totalQuestions || answered),
+    totalQuestions,
+    accuracy,
+    longestStreak,
+    outcome: normalizedOutcome
+  };
+}
+
+function loadRunHistoryStore() {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return [];
+  }
+
+  try {
+    let raw = window.localStorage.getItem(RUN_HISTORY_STORAGE_KEY);
+    if (!raw) {
+      raw = window.localStorage.getItem(LEGACY_TYPED_RUN_HISTORY_STORAGE_KEY);
+    }
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map(sanitizeRunHistoryEntry)
+      .filter(Boolean)
+      .slice(0, RUN_HISTORY_LIMIT);
+  } catch (_) {
+    return [];
+  }
+}
+
+let runHistory = loadRunHistoryStore();
+
+function saveRunHistoryStore() {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+
+  try {
+    window.localStorage.setItem(
+      RUN_HISTORY_STORAGE_KEY,
+      JSON.stringify(runHistory.slice(0, RUN_HISTORY_LIMIT))
+    );
+  } catch (_) {
+    // Ignore storage failures (private mode, quota, etc.)
+  }
+}
+
+function appendRunHistory(rawEntry) {
+  const entry = sanitizeRunHistoryEntry(rawEntry);
+  if (!entry) return;
+
+  runHistory = [entry, ...runHistory].slice(0, RUN_HISTORY_LIMIT);
+  saveRunHistoryStore();
 }
 
 function getQuestionStatsKey(question) {
@@ -421,6 +734,36 @@ function addFailedReviewItem(question, chosenIdx, builtCmd) {
   });
 }
 
+function addTypedFailedReviewItem(question, enteredCommand) {
+  if (!question || !typedRun || !Array.isArray(typedRun.failedReviewItems)) return;
+
+  const keyBase = getQuestionStatsKey(question) || question.uid || question.q || `typed-${typedRun.questionIndex}`;
+  const key = `typed:${keyBase}`;
+  if (!key) return;
+  if (typedRun.failedReviewItems.some(item => item.key === key)) return;
+
+  const normalizedAttempt = canonicalizeTypedCommand(enteredCommand);
+  const builtCmd = normalizedAttempt ? normalizedAttempt.split(' ') : [];
+
+  typedRun.failedReviewItems.push({
+    key,
+    levelTitle: question.levelTitle || '',
+    groupLabel: question.groupLabel || '',
+    type: question.type || 'command',
+    q: question.q || '',
+    context: question.context || '',
+    options: Array.isArray(question.options) ? [...question.options] : [],
+    answer: Array.isArray(question.answer) ? [...question.answer] : question.answer,
+    explain: question.explain || '',
+    tip: question.tip || '',
+    deepDive: question.deepDive || '',
+    wrongReason: '',
+    chosenOption: '',
+    builtCmd,
+    isBoss: Boolean(question.isBoss)
+  });
+}
+
 function renderFailedReviewCard(item, index) {
   const contextHtml = item.context
     ? `<div class="question-context">${escapeHtml(item.context)}</div>`
@@ -437,14 +780,14 @@ function renderFailedReviewCard(item, index) {
   const yourAttemptHtml = item.type === 'command'
     ? (item.builtCmd.length > 0
       ? `
-        <div class="feedback-correct-box">
+        <div class="feedback-attempt-box">
           <strong>🛠️ Your command:</strong>
           ${escapeHtml(item.builtCmd.join(' '))}
         </div>`
       : '')
     : (item.chosenOption
       ? `
-        <div class="feedback-correct-box">
+        <div class="feedback-attempt-box">
           <strong>🛠️ Your answer:</strong>
           ${escapeHtml(item.chosenOption)}
         </div>`
@@ -463,19 +806,19 @@ function renderFailedReviewCard(item, index) {
     : '';
 
   const tipHtml = item.tip
-    ? `
-      <div class="feedback-tip">
-        <strong>🐹 Go Tip:</strong>
-        <pre class="feedback-code">${escapeHtml(item.tip)}</pre>
-      </div>`
+    ? renderFoldableFeedbackBlock(
+      'feedback-tip',
+      '🐹 Go Tip:',
+      `<pre class="feedback-code">${escapeHtml(item.tip)}</pre>`
+    )
     : '';
 
   const deepDiveHtml = item.deepDive
-    ? `
-      <div class="feedback-deep-dive">
-        <strong>🔬 Deep Dive:</strong>
-        <pre class="feedback-code">${formatRichTextWithLinks(item.deepDive)}</pre>
-      </div>`
+    ? renderFoldableFeedbackBlock(
+      'feedback-deep-dive',
+      '🔬 Deep Dive:',
+      `<pre class="feedback-code">${formatRichTextWithLinks(item.deepDive)}</pre>`
+    )
     : '';
 
   return `
@@ -501,8 +844,44 @@ function renderFailedReviewCard(item, index) {
     </article>`;
 }
 
+function renderFoldableFeedbackBlock(containerClass, title, contentHtml) {
+  return `
+      <div class="${containerClass} feedback-foldable">
+        <button
+          type="button"
+          class="feedback-fold-toggle"
+          onclick="toggleFeedbackFold(event)"
+          aria-expanded="false"
+        >
+          <span class="feedback-fold-caret" aria-hidden="true">▸</span>
+          <strong>${title}</strong>
+        </button>
+        <div class="feedback-fold-track">
+          <div class="feedback-fold-content">
+            ${contentHtml}
+          </div>
+        </div>
+      </div>`;
+}
+
+function toggleFeedbackFold(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  const toggleButton = event && event.currentTarget;
+  if (!toggleButton) return;
+  const section = toggleButton.closest('.feedback-foldable');
+  if (!section) return;
+
+  const isExpanded = section.classList.toggle('open');
+  toggleButton.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+}
+
 function showFailedReview() {
   missionOutcome = 'failed';
+  persistMainRunIfNeeded('failed');
   document.getElementById('progress').style.width = `${Math.min((totalAnswered / Math.max(totalChallenges, 1)) * 100, 100)}%`;
 
   const activeLevel = levels[Math.max(0, Math.min(
@@ -542,7 +921,14 @@ function repeatFailedLevel() {
     ? Math.max(0, Math.min(failedLevelIndex, levels.length - 1))
     : Math.max(0, Math.min(levelIndex, levels.length - 1));
 
-  levelIndex = targetLevelIndex;
+  runHistoryViewActive = false;
+  activeChallengeMode = CHALLENGE_MODE_MAIN;
+  directQuestionMode = false;
+  directQuestionSourceLevelIndex = -1;
+  clearQuestionHash();
+  resetTypedRunState();
+  rebuildMainRun();
+  levelIndex = Math.max(0, Math.min(targetLevelIndex, levels.length - 1));
   questionIndex = 0;
   score = 0;
   lives = 3;
@@ -560,7 +946,11 @@ function repeatFailedLevel() {
   missionOutcome = 'in_progress';
   failedReviewItems = [];
   failedLevelIndex = null;
+  beginNewMainRun();
 
+  resetMainLevelRuntime(levels[levelIndex]);
+  populateLevelSelector();
+  updateStaticLabels();
   updateHUD();
   render();
 }
@@ -572,12 +962,13 @@ campaignLevels.forEach(level => {
   }
   level.questions = prioritizeQuestionsByDailyHitRatio(level.questions);
 });
-const levels = campaignLevels.filter(level => level.questions.length > 0);
-const plannedLevels = campaignLevels.filter(level => level.questions.length === 0);
-const roadmapTargetQuestions = campaignLevels.reduce((sum, level) => (
-  sum + (Number.isFinite(level.targetQuestionCount) ? level.targetQuestionCount : level.questions.length)
-), 0);
-const totalChallenges = levels.reduce((sum, level) => sum + level.questions.length, 0);
+const playableSourceLevels = campaignLevels.filter(level => level.questions.length > 0);
+let levels = buildMainRunLevels(playableSourceLevels);
+let totalChallenges = levels.reduce((sum, level) => sum + level.questions.length, 0);
+let activeChallengeMode = CHALLENGE_MODE_MAIN;
+const questionShortIdLookup = buildQuestionShortIdLookup(playableSourceLevels);
+let directQuestionMode = false;
+let directQuestionSourceLevelIndex = -1;
 
 let levelIndex = 0;
 let questionIndex = 0;
@@ -597,15 +988,312 @@ let completedBadges = [];
 let missionOutcome = 'in_progress';
 let failedReviewItems = [];
 let failedLevelIndex = null;
+let runHistoryViewActive = false;
+let mainRunStartedAtMs = Date.now();
+let mainRunHistorySaved = false;
+let typedRun = {
+  sourceLevelIndex: -1,
+  levelId: '',
+  levelTitle: '',
+  levelDifficulty: '',
+  questions: [],
+  questionIndex: 0,
+  score: 0,
+  lives: 3,
+  streak: 0,
+  maxStreak: 0,
+  totalAnswered: 0,
+  totalCorrect: 0,
+  answered: false,
+  missionOutcome: 'idle',
+  baseQuestionTimeSec: DEFAULT_CHALLENGE_CONFIG.baseQuestionTimeSec,
+  carryFromPreviousSec: 0,
+  currentQuestionTimeSec: DEFAULT_CHALLENGE_CONFIG.baseQuestionTimeSec,
+  questionStartedAtMs: 0,
+  currentRemainingSec: DEFAULT_CHALLENGE_CONFIG.baseQuestionTimeSec,
+  timerIntervalId: null,
+  lastSubmissionFeedback: null,
+  runStartedAtMs: 0,
+  runEndedAtMs: 0,
+  historySaved: false,
+  failedReviewItems: []
+};
+
+function createMainLevelRuntime() {
+  return {
+    answeredIds: new Set(),
+    askedIds: new Set(),
+    currentQuestionId: null,
+    hardBlocked: false
+  };
+}
+
+function ensureMainLevelRuntime(level) {
+  if (!level) return createMainLevelRuntime();
+  if (!level.runtime) {
+    level.runtime = createMainLevelRuntime();
+  }
+  return level.runtime;
+}
+
+function resetMainLevelRuntime(level) {
+  if (!level) return;
+  level.runtime = createMainLevelRuntime();
+}
+
+function resetAllMainLevelRuntime() {
+  levels.forEach(resetMainLevelRuntime);
+}
+
+function rebuildMainRun() {
+  levels = buildMainRunLevels(playableSourceLevels);
+  totalChallenges = levels.reduce((sum, level) => sum + level.questions.length, 0);
+  resetAllMainLevelRuntime();
+}
+
+function startNormalMainRunAtLevel(targetLevelIndex = 0) {
+  directQuestionMode = false;
+  directQuestionSourceLevelIndex = -1;
+  activeChallengeMode = CHALLENGE_MODE_MAIN;
+  runHistoryViewActive = false;
+  clearQuestionHash();
+  resetTypedRunState();
+  rebuildMainRun();
+  levelIndex = Math.max(0, Math.min(targetLevelIndex, levels.length - 1));
+  questionIndex = 0;
+  score = 0;
+  lives = 3;
+  streak = 0;
+  maxStreak = 0;
+  answered = false;
+  cmdBuilt = [];
+  usedTokens = new Set();
+  wrongAnsweredIdx = -1;
+  optionMap = [];
+  tokenPool = [];
+  totalAnswered = 0;
+  totalCorrect = 0;
+  completedBadges = [];
+  missionOutcome = 'in_progress';
+  failedReviewItems = [];
+  failedLevelIndex = null;
+  beginNewMainRun();
+  resetMainLevelRuntime(levels[levelIndex]);
+  updateStaticLabels();
+  populateLevelSelector();
+  updateHUD();
+  render();
+  return true;
+}
+
+function getQuestionShortIdFromHash() {
+  if (typeof window === 'undefined' || !window.location) return '';
+  const rawHash = typeof window.location.hash === 'string'
+    ? window.location.hash.slice(1)
+    : '';
+  if (!rawHash) return '';
+
+  try {
+    return normalizeQuestionShortId(decodeURIComponent(rawHash));
+  } catch (_) {
+    return normalizeQuestionShortId(rawHash);
+  }
+}
+
+function clearQuestionHash() {
+  if (typeof window === 'undefined' || !window.location) return;
+  if (!window.location.hash) return;
+
+  if (window.history && typeof window.history.replaceState === 'function') {
+    const nextUrl = `${window.location.pathname}${window.location.search}`;
+    window.history.replaceState(null, '', nextUrl);
+    return;
+  }
+
+  window.location.hash = '';
+}
+
+function replaceQuestionHash(shortId) {
+  if (typeof window === 'undefined' || !window.location) return;
+  const normalizedShortId = normalizeQuestionShortId(shortId);
+  if (!normalizedShortId) return;
+
+  const nextHash = `#${normalizedShortId}`;
+  if (window.location.hash === nextHash) return;
+
+  if (window.history && typeof window.history.replaceState === 'function') {
+    const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
+    window.history.replaceState(null, '', nextUrl);
+    return;
+  }
+
+  window.location.hash = normalizedShortId;
+}
+
+function openQuestionByShortId(shortId) {
+  const normalizedShortId = normalizeQuestionShortId(shortId);
+  if (!normalizedShortId) return false;
+
+  const target = questionShortIdLookup.get(normalizedShortId);
+  if (!target) return false;
+
+  runHistoryViewActive = false;
+  activeChallengeMode = CHALLENGE_MODE_MAIN;
+  directQuestionMode = true;
+  directQuestionSourceLevelIndex = target.sourceLevelIndex;
+  resetTypedRunState();
+  levels = [cloneLevelForRun(target.level, [target.question])];
+  totalChallenges = 1;
+  levelIndex = 0;
+  questionIndex = 0;
+  score = 0;
+  lives = 3;
+  streak = 0;
+  maxStreak = 0;
+  answered = false;
+  cmdBuilt = [];
+  usedTokens = new Set();
+  wrongAnsweredIdx = -1;
+  optionMap = [];
+  tokenPool = [];
+  totalAnswered = 0;
+  totalCorrect = 0;
+  completedBadges = [];
+  missionOutcome = 'in_progress';
+  failedReviewItems = [];
+  failedLevelIndex = null;
+  beginNewMainRun();
+  resetAllMainLevelRuntime();
+  updateStaticLabels();
+  populateLevelSelector();
+  updateHUD();
+  replaceQuestionHash(target.question.shortId);
+  render();
+  return true;
+}
+
+function exitDirectQuestionMode() {
+  if (!directQuestionMode) return false;
+  return startNormalMainRunAtLevel(0);
+}
+
+function handleQuestionHashChange() {
+  const shortId = getQuestionShortIdFromHash();
+  if (!shortId) {
+    return exitDirectQuestionMode();
+  }
+  return openQuestionByShortId(shortId);
+}
+
+function stopTypedTimer() {
+  if (typedRun.timerIntervalId !== null) {
+    window.clearInterval(typedRun.timerIntervalId);
+    typedRun.timerIntervalId = null;
+  }
+}
+
+function resetTypedRunState() {
+  stopTypedTimer();
+  typedRun = {
+    sourceLevelIndex: -1,
+    levelId: '',
+    levelTitle: '',
+    levelDifficulty: '',
+    questions: [],
+    questionIndex: 0,
+    score: 0,
+    lives: 3,
+    streak: 0,
+    maxStreak: 0,
+    totalAnswered: 0,
+    totalCorrect: 0,
+    answered: false,
+    missionOutcome: 'idle',
+    baseQuestionTimeSec: DEFAULT_CHALLENGE_CONFIG.baseQuestionTimeSec,
+    carryFromPreviousSec: 0,
+    currentQuestionTimeSec: DEFAULT_CHALLENGE_CONFIG.baseQuestionTimeSec,
+    questionStartedAtMs: 0,
+    currentRemainingSec: DEFAULT_CHALLENGE_CONFIG.baseQuestionTimeSec,
+    timerIntervalId: null,
+    lastSubmissionFeedback: null,
+    runStartedAtMs: 0,
+    runEndedAtMs: 0,
+    historySaved: false,
+    failedReviewItems: []
+  };
+}
 
 function getCurrentLevel() {
   return levels[levelIndex] || null;
 }
 
+function getCurrentTypedQuestion() {
+  return typedRun.questions[typedRun.questionIndex] || null;
+}
+
+function getValidPrerequisiteIds(question, levelQuestionIdSet) {
+  if (!question || !Array.isArray(question.requires)) return [];
+  return question.requires.filter(requiredId => levelQuestionIdSet.has(requiredId));
+}
+
+function isMainQuestionEligible(question, runtime, levelQuestionIdSet) {
+  const validPrerequisites = getValidPrerequisiteIds(question, levelQuestionIdSet);
+  return validPrerequisites.every(requiredId => runtime.answeredIds.has(requiredId));
+}
+
+function pickNextMainQuestion(level, runtime) {
+  if (!level || !runtime) return null;
+
+  const unanswered = level.questions.filter(question => !runtime.askedIds.has(question.id));
+  if (unanswered.length === 0) {
+    runtime.hardBlocked = false;
+    return null;
+  }
+
+  const levelQuestionIdSet = new Set(level.questions.map(question => question.id));
+  const eligible = unanswered.filter(question => (
+    isMainQuestionEligible(question, runtime, levelQuestionIdSet)
+  ));
+
+  if (eligible.length === 0) {
+    runtime.hardBlocked = true;
+    return null;
+  }
+
+  runtime.hardBlocked = false;
+  const bossDeferredEligible = eligible.some(question => !question.isBoss)
+    ? eligible.filter(question => !question.isBoss)
+    : eligible;
+  const eligibleWithBuckets = bossDeferredEligible.map(question => ({
+    question,
+    bucket: getQuestionPriorityBucket(getQuestionTodayStats(question))
+  }));
+  const minBucket = Math.min(...eligibleWithBuckets.map(item => item.bucket));
+  const bucketCandidates = eligibleWithBuckets
+    .filter(item => item.bucket === minBucket)
+    .map(item => item.question);
+
+  fisherYatesShuffle(bucketCandidates);
+  const chosen = bucketCandidates[0] || null;
+  if (!chosen) return null;
+
+  runtime.currentQuestionId = chosen.id;
+  runtime.askedIds.add(chosen.id);
+  return chosen;
+}
+
 function getCurrentQuestion() {
   const level = getCurrentLevel();
   if (!level) return null;
-  return level.questions[questionIndex] || null;
+
+  const runtime = ensureMainLevelRuntime(level);
+  if (runtime.currentQuestionId) {
+    const activeQuestion = level.questions.find(question => question.id === runtime.currentQuestionId);
+    if (activeQuestion) return activeQuestion;
+    runtime.currentQuestionId = null;
+  }
+
+  return pickNextMainQuestion(level, runtime);
 }
 
 function getCompletedChallengeCount() {
@@ -626,9 +1314,7 @@ function getCompletedChallengeCount() {
 function updateStaticLabels() {
   const subtitle = document.getElementById('campaign-subtitle');
   if (subtitle) {
-    const plannedSuffix = plannedLevels.length > 0 ? ` · ${plannedLevels.length} upcoming levels` : '';
-    const roadmapSuffix = roadmapTargetQuestions > 0 ? ` · roadmap ${roadmapTargetQuestions} questions` : '';
-    subtitle.textContent = `// ${totalChallenges} live challenges · ${levels.length} playable levels${plannedSuffix}${roadmapSuffix}`;
+    subtitle.textContent = '';
   }
 }
 
@@ -642,37 +1328,48 @@ function getLevelOptionLabel(level, index) {
 function populateLevelSelector() {
   const levelSelect = document.getElementById('level-select');
   if (!levelSelect) return;
+  const selectorLevels = directQuestionMode ? playableSourceLevels : levels;
 
-  if (levels.length === 0) {
+  if (selectorLevels.length === 0) {
     levelSelect.innerHTML = '<option value="">No playable levels</option>';
     levelSelect.disabled = true;
     return;
   }
 
-  levelSelect.innerHTML = levels
+  levelSelect.innerHTML = selectorLevels
     .map((level, index) => (
       `<option value="${index}">${escapeHtml(getLevelOptionLabel(level, index))}</option>`
     ))
     .join('');
 
   levelSelect.disabled = false;
-  levelSelect.value = String(Math.min(levelIndex, levels.length - 1));
+  const selectedIndex = directQuestionMode
+    ? Math.max(0, Math.min(directQuestionSourceLevelIndex, selectorLevels.length - 1))
+    : Math.min(levelIndex, selectorLevels.length - 1);
+  levelSelect.value = String(selectedIndex);
   levelSelect.onchange = handleLevelSelectChange;
 }
 
 function handleLevelSelectChange(event) {
+  if (activeChallengeMode === CHALLENGE_MODE_TYPED) return;
   if (missionOutcome === 'failed') return;
 
   const selectedLevelIndex = Number(event.target.value);
+  const selectorLevels = directQuestionMode ? playableSourceLevels : levels;
   const isValidIndex = Number.isInteger(selectedLevelIndex)
     && selectedLevelIndex >= 0
-    && selectedLevelIndex < levels.length;
+    && selectedLevelIndex < selectorLevels.length;
 
   if (!isValidIndex) return;
+  if (directQuestionMode) {
+    startNormalMainRunAtLevel(selectedLevelIndex);
+    return;
+  }
   if (selectedLevelIndex === levelIndex && questionIndex === 0) return;
 
   levelIndex = selectedLevelIndex;
   questionIndex = 0;
+  resetMainLevelRuntime(levels[levelIndex]);
   answered = false;
   cmdBuilt = [];
   usedTokens = new Set();
@@ -683,11 +1380,101 @@ function handleLevelSelectChange(event) {
   render();
 }
 
+function closeQuickMenu() {
+  const panel = document.getElementById('quick-menu-panel');
+  const toggleBtn = document.getElementById('menu-toggle-btn');
+  if (panel) panel.classList.remove('show');
+  if (toggleBtn) toggleBtn.setAttribute('aria-expanded', 'false');
+}
+
+function toggleQuickMenu(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  const panel = document.getElementById('quick-menu-panel');
+  const toggleBtn = document.getElementById('menu-toggle-btn');
+  if (!panel) return;
+
+  const nextState = !panel.classList.contains('show');
+  if (nextState) {
+    panel.classList.add('show');
+  } else {
+    panel.classList.remove('show');
+  }
+
+  if (toggleBtn) {
+    toggleBtn.setAttribute('aria-expanded', nextState ? 'true' : 'false');
+  }
+}
+
 function updateHUD() {
-  document.getElementById('score').textContent = score;
   const hearts = ['❤️ ❤️ ❤️', '❤️ ❤️ 🖤', '❤️ 🖤 🖤', '🖤 🖤 🖤'];
-  document.getElementById('lives').textContent = hearts[3 - lives] || '🖤 🖤 🖤';
-  document.getElementById('streak').textContent = `🔥 ${streak}`;
+  const modeMainButton = document.getElementById('mode-main-btn');
+  const modeTypedButton = document.getElementById('mode-typed-btn');
+
+  if (modeMainButton) {
+    const isMainMode = activeChallengeMode === CHALLENGE_MODE_MAIN;
+    modeMainButton.classList.toggle('active', isMainMode);
+    modeMainButton.setAttribute('aria-pressed', isMainMode ? 'true' : 'false');
+  }
+
+  if (modeTypedButton) {
+    const isTypedMode = activeChallengeMode === CHALLENGE_MODE_TYPED;
+    modeTypedButton.classList.toggle('active', isTypedMode);
+    modeTypedButton.setAttribute('aria-pressed', isTypedMode ? 'true' : 'false');
+  }
+
+  const levelHud = document.getElementById('level-label');
+  const badgesHud = document.getElementById('badges-earned');
+  const levelSelect = document.getElementById('level-select');
+  const scoreEl = document.getElementById('score');
+  const livesEl = document.getElementById('lives');
+  const streakEl = document.getElementById('streak');
+  const questionCountEl = document.getElementById('qcount');
+  const progressEl = document.getElementById('progress');
+
+  if (activeChallengeMode === CHALLENGE_MODE_TYPED) {
+    if (scoreEl) scoreEl.textContent = String(typedRun.score);
+    if (livesEl) livesEl.textContent = hearts[3 - typedRun.lives] || '🖤 🖤 🖤';
+    if (streakEl) streakEl.textContent = `🔥 ${typedRun.streak}`;
+
+    const totalTypedQuestions = typedRun.questions.length;
+    const typedDisplayNumber = totalTypedQuestions > 0
+      ? Math.min(typedRun.questionIndex + 1, totalTypedQuestions)
+      : 0;
+    if (questionCountEl) {
+      questionCountEl.textContent = `${typedDisplayNumber} / ${totalTypedQuestions}`;
+    }
+
+    const safeTypedTotal = Math.max(totalTypedQuestions, 1);
+    const typedProgressPercent = typedRun.missionOutcome === 'complete'
+      ? 100
+      : Math.min((typedRun.totalAnswered / safeTypedTotal) * 100, 100);
+    if (progressEl) {
+      progressEl.style.width = `${typedProgressPercent}%`;
+    }
+
+    if (levelHud) {
+      levelHud.textContent = typedRun.levelTitle
+        ? `Typed · ${typedRun.levelDifficulty || 'Command Drill'}`
+        : 'Typed · Not started';
+    }
+
+    if (badgesHud) {
+      badgesHud.textContent = '—';
+    }
+
+    if (levelSelect) {
+      levelSelect.disabled = true;
+    }
+    return;
+  }
+
+  if (scoreEl) scoreEl.textContent = String(score);
+  if (livesEl) livesEl.textContent = hearts[3 - lives] || '🖤 🖤 🖤';
+  if (streakEl) streakEl.textContent = `🔥 ${streak}`;
 
   const currentLevel = getCurrentLevel();
   const completedChallenges = getCompletedChallengeCount();
@@ -696,15 +1483,18 @@ function updateHUD() {
     ? Math.min(completedChallenges + 1, totalChallenges)
     : totalChallenges > 0 ? totalChallenges : 0;
 
-  document.getElementById('qcount').textContent = `${displayNumber} / ${totalChallenges}`;
+  if (questionCountEl) {
+    questionCountEl.textContent = `${displayNumber} / ${totalChallenges}`;
+  }
   const progressPercent = missionOutcome === 'failed'
     ? Math.min((totalAnswered / safeTotalChallenges) * 100, 100)
     : (missionOutcome === 'complete' || levelIndex >= levels.length)
       ? 100
       : Math.min((completedChallenges / safeTotalChallenges) * 100, 100);
-  document.getElementById('progress').style.width = `${progressPercent}%`;
+  if (progressEl) {
+    progressEl.style.width = `${progressPercent}%`;
+  }
 
-  const levelHud = document.getElementById('level-label');
   if (levelHud) {
     levelHud.textContent = currentLevel
       ? `L${levelIndex} · ${currentLevel.difficulty}`
@@ -713,7 +1503,6 @@ function updateHUD() {
         : 'No levels';
   }
 
-  const badgesHud = document.getElementById('badges-earned');
   if (badgesHud) {
     if (completedBadges.length === 0) {
       badgesHud.textContent = '0';
@@ -724,13 +1513,40 @@ function updateHUD() {
     }
   }
 
-  const levelSelect = document.getElementById('level-select');
   if (levelSelect && levels.length > 0) {
     const selectedIndex = currentLevel ? levelIndex : levels.length - 1;
     const selectedValue = String(selectedIndex);
     if (levelSelect.value !== selectedValue) {
       levelSelect.value = selectedValue;
     }
+    levelSelect.disabled = false;
+  }
+}
+
+function setChallengeMode(mode) {
+  if (mode === CHALLENGE_MODE_TYPED) {
+    if (activeChallengeMode === CHALLENGE_MODE_TYPED) {
+      if (runHistoryViewActive) {
+        runHistoryViewActive = false;
+        render();
+      }
+      return;
+    }
+
+    startTypedChallenge();
+    return;
+  }
+
+  if (mode === CHALLENGE_MODE_MAIN) {
+    if (activeChallengeMode === CHALLENGE_MODE_MAIN) {
+      if (runHistoryViewActive) {
+        runHistoryViewActive = false;
+        render();
+      }
+      return;
+    }
+
+    returnToMainChallenge();
   }
 }
 
@@ -811,6 +1627,12 @@ function renderMeta(level, question) {
     </div>
     ${focusSectionHtml}
     ${tagsSectionHtml}`;
+}
+
+function renderQuestionShortId(question) {
+  const shortId = getQuestionShortId(question);
+  if (!shortId) return '';
+  return `<div class="question-short-id" aria-label="Question ID">${escapeHtml(shortId)}</div>`;
 }
 
 function getJourneyTheme(question) {
@@ -909,7 +1731,478 @@ function getQuestionBadge(question) {
     </span>`;
 }
 
+function canonicalizeTypedCommand(value) {
+  return normalizeKubectlResourceRefs(String(value || ''))
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function getCommandAnswerText(question) {
+  if (!question) return '';
+  if (Array.isArray(question.answer)) return question.answer.join(' ');
+  return canonicalizeTypedCommand(question.answer);
+}
+
+function formatSignedTimerSeconds(seconds) {
+  if (!Number.isFinite(seconds)) return '0s';
+  if (Math.abs(seconds) < 0.05) return '0s';
+  if (seconds > 0) return `${Math.ceil(seconds)}s`;
+  return `${Math.floor(seconds)}s`;
+}
+
+function getTypedTimerToneClass(seconds) {
+  if (seconds > 0.05) return 'typed-timer-positive';
+  if (seconds < -0.05) return 'typed-timer-negative';
+  return 'typed-timer-zero';
+}
+
+function updateTypedTimerDisplay() {
+  if (activeChallengeMode !== CHALLENGE_MODE_TYPED) return;
+  const timerValueEl = document.getElementById('typed-timer-value');
+  if (!timerValueEl) return;
+
+  if (!typedRun.answered) {
+    const elapsedSec = (Date.now() - typedRun.questionStartedAtMs) / 1000;
+    typedRun.currentRemainingSec = typedRun.currentQuestionTimeSec - elapsedSec;
+  }
+
+  timerValueEl.textContent = formatSignedTimerSeconds(typedRun.currentRemainingSec);
+  timerValueEl.classList.remove('typed-timer-positive', 'typed-timer-zero', 'typed-timer-negative');
+  timerValueEl.classList.add(getTypedTimerToneClass(typedRun.currentRemainingSec));
+}
+
+function startTypedQuestionTimer() {
+  stopTypedTimer();
+  typedRun.questionStartedAtMs = Date.now();
+  typedRun.currentRemainingSec = typedRun.currentQuestionTimeSec;
+  updateTypedTimerDisplay();
+  typedRun.timerIntervalId = window.setInterval(updateTypedTimerDisplay, 200);
+}
+
+function normalizeRunOutcome(outcome) {
+  if (outcome === 'failed') return 'failed';
+  if (outcome === 'aborted') return 'aborted';
+  return 'complete';
+}
+
+function persistTypedRunIfNeeded(outcomeOverride) {
+  if (!typedRun || typedRun.historySaved) return;
+  if (!typedRun.levelTitle && !typedRun.levelId) return;
+
+  const startedAtMs = Number.isFinite(typedRun.runStartedAtMs) && typedRun.runStartedAtMs > 0
+    ? typedRun.runStartedAtMs
+    : Date.now();
+  const endedAtMs = Date.now();
+  const answeredCount = Number.isFinite(typedRun.totalAnswered)
+    ? Math.max(0, Math.floor(typedRun.totalAnswered))
+    : 0;
+  const totalQuestions = Array.isArray(typedRun.questions) ? typedRun.questions.length : 0;
+  const correctCount = Number.isFinite(typedRun.totalCorrect)
+    ? Math.max(0, Math.floor(typedRun.totalCorrect))
+    : 0;
+  const normalizedOutcome = normalizeRunOutcome(
+    outcomeOverride || typedRun.missionOutcome
+  );
+
+  appendRunHistory({
+    mode: CHALLENGE_MODE_TYPED,
+    startedAtMs,
+    endedAtMs,
+    levelId: typedRun.levelId,
+    levelTitle: typedRun.levelTitle,
+    levelDifficulty: typedRun.levelDifficulty,
+    score: typedRun.score,
+    correct: correctCount,
+    answered: answeredCount,
+    totalQuestions,
+    longestStreak: typedRun.maxStreak,
+    outcome: normalizedOutcome
+  });
+
+  typedRun.historySaved = true;
+  typedRun.runEndedAtMs = endedAtMs;
+}
+
+function beginNewMainRun() {
+  mainRunStartedAtMs = Date.now();
+  mainRunHistorySaved = false;
+}
+
+function getMainRunLevelTitle() {
+  const level = levels[Math.max(0, Math.min(levelIndex, levels.length - 1))] || null;
+  return level ? level.title : 'Campaign';
+}
+
+function persistMainRunIfNeeded(outcomeOverride) {
+  if (mainRunHistorySaved) return;
+
+  const normalizedOutcome = normalizeRunOutcome(outcomeOverride || missionOutcome);
+  const hasProgress = totalAnswered > 0 || totalCorrect > 0 || score > 0;
+  if (normalizedOutcome === 'aborted' && !hasProgress) return;
+
+  const startedAtMs = Number.isFinite(mainRunStartedAtMs) && mainRunStartedAtMs > 0
+    ? mainRunStartedAtMs
+    : Date.now();
+  const endedAtMs = Date.now();
+
+  appendRunHistory({
+    mode: CHALLENGE_MODE_MAIN,
+    startedAtMs,
+    endedAtMs,
+    levelId: '',
+    levelTitle: getMainRunLevelTitle(),
+    levelDifficulty: 'Campaign',
+    score,
+    correct: totalCorrect,
+    answered: totalAnswered,
+    totalQuestions: totalChallenges,
+    longestStreak: maxStreak,
+    outcome: normalizedOutcome
+  });
+
+  mainRunHistorySaved = true;
+}
+
+function formatRunTimestamp(timestampMs) {
+  if (!Number.isFinite(timestampMs) || timestampMs <= 0) return '—';
+  return new Date(timestampMs).toLocaleString();
+}
+
+function getRunOutcomeLabel(outcome) {
+  if (outcome === 'failed') return 'Failed';
+  if (outcome === 'aborted') return 'Aborted';
+  return 'Complete';
+}
+
+function getRunOutcomeClass(outcome) {
+  if (outcome === 'failed') return 'typed-history-outcome-failed';
+  if (outcome === 'aborted') return 'typed-history-outcome-aborted';
+  return 'typed-history-outcome-complete';
+}
+
+function getRunModeLabel(mode) {
+  return mode === CHALLENGE_MODE_MAIN ? 'Main' : 'Typed';
+}
+
+function renderRunHistoryScreen() {
+  const gameArea = document.getElementById('game-area');
+  if (!gameArea) return;
+
+  const rowsHtml = runHistory.length > 0
+    ? runHistory.map((run, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(formatRunTimestamp(run.endedAtMs || run.startedAtMs))}</td>
+        <td>${escapeHtml(getRunModeLabel(run.mode))}</td>
+        <td>${escapeHtml(run.levelTitle || 'N/A')}</td>
+        <td>${run.score}</td>
+        <td>${run.accuracy}%</td>
+        <td>${run.answered} / ${run.totalQuestions}</td>
+        <td>${run.longestStreak > 0 ? `🔥 ${run.longestStreak}` : '—'}</td>
+        <td class="typed-history-outcome ${getRunOutcomeClass(run.outcome)}">${escapeHtml(getRunOutcomeLabel(run.outcome))}</td>
+      </tr>
+    `).join('')
+    : `
+      <tr>
+        <td colspan="9" class="typed-history-empty">No runs saved yet.</td>
+      </tr>
+    `;
+
+  gameArea.innerHTML = `
+    <div class="card typed-history-screen">
+      <h2>Runs History</h2>
+      <p class="end-summary">Saved runs: ${runHistory.length}</p>
+      <div class="typed-history-table-wrap">
+        <table class="typed-history-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>When</th>
+              <th>Mode</th>
+              <th>Level</th>
+              <th>Score</th>
+              <th>Accuracy</th>
+              <th>Answered</th>
+              <th>Longest Streak</th>
+              <th>Outcome</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+      <div class="typed-actions">
+        <button class="btn show" onclick="closeRunHistory()">Back</button>
+      </div>
+    </div>`;
+
+  updateHUD();
+}
+
+function pauseTypedRunTimerForHistory() {
+  if (activeChallengeMode !== CHALLENGE_MODE_TYPED) return;
+  if (typedRun.missionOutcome !== 'running' || typedRun.answered) return;
+  if (typedRun.questionStartedAtMs <= 0) return;
+
+  const elapsedSec = (Date.now() - typedRun.questionStartedAtMs) / 1000;
+  typedRun.currentRemainingSec = typedRun.currentQuestionTimeSec - elapsedSec;
+  typedRun.currentQuestionTimeSec = typedRun.currentRemainingSec;
+  typedRun.questionStartedAtMs = 0;
+}
+
+function openRunHistory() {
+  closeQuickMenu();
+  pauseTypedRunTimerForHistory();
+  stopTypedTimer();
+  runHistoryViewActive = true;
+  runHistory = loadRunHistoryStore();
+  renderRunHistoryScreen();
+}
+
+function closeRunHistory() {
+  runHistoryViewActive = false;
+  render();
+}
+
+function openTypedRunHistory() {
+  openRunHistory();
+}
+
+function closeTypedRunHistory() {
+  closeRunHistory();
+}
+
+function renderTypedFailedReview() {
+  persistTypedRunIfNeeded('failed');
+  stopTypedTimer();
+  const gameArea = document.getElementById('game-area');
+  if (!gameArea) return;
+
+  const totalQuestions = typedRun.questions.length;
+  const accuracy = typedRun.totalAnswered > 0
+    ? Math.round((typedRun.totalCorrect / typedRun.totalAnswered) * 100)
+    : 0;
+  const cardsHtml = typedRun.failedReviewItems.length > 0
+    ? typedRun.failedReviewItems.map(renderFailedReviewCard).join('')
+    : '<div class="failed-review-empty">No failed cards were captured for this typed run.</div>';
+  const hasTypedSource = Number.isInteger(typedRun.sourceLevelIndex)
+    && typedRun.sourceLevelIndex >= 0
+    && typedRun.sourceLevelIndex < playableSourceLevels.length;
+  const retryButtonHtml = hasTypedSource
+    ? `<button class="btn show restart-btn" onclick="startTypedChallenge(${typedRun.sourceLevelIndex})">Repeat Typed Run ↺</button>`
+    : '';
+
+  gameArea.innerHTML = `
+    <div class="card failed-review-screen">
+      <h2>Mission Failed — Review</h2>
+      <p class="end-summary">Typed run ended with no hearts left.</p>
+      <div class="failed-review-stats">
+        <div class="failed-review-stat"><span class="label">Score</span><span class="value">${typedRun.score}</span></div>
+        <div class="failed-review-stat"><span class="label">Accuracy</span><span class="value">${accuracy}%</span></div>
+        <div class="failed-review-stat"><span class="label">Answered</span><span class="value">${typedRun.totalAnswered}/${totalQuestions}</span></div>
+        <div class="failed-review-stat"><span class="label">Failed Cards</span><span class="value">${typedRun.failedReviewItems.length}</span></div>
+        <div class="failed-review-stat"><span class="label">Level</span><span class="value">${escapeHtml(typedRun.levelTitle || 'N/A')}</span></div>
+        <div class="failed-review-stat"><span class="label">Longest Streak</span><span class="value">${typedRun.maxStreak}</span></div>
+      </div>
+      <div class="failed-review-actions">
+        ${retryButtonHtml}
+        <button class="btn show restart-btn failed-review-secondary" onclick="returnToMainChallenge()">Back to Main Challenge</button>
+      </div>
+      <div class="failed-review-list">${cardsHtml}</div>
+    </div>`;
+}
+
+function renderTypedRunSummary() {
+  if (typedRun.missionOutcome === 'complete' || typedRun.missionOutcome === 'failed') {
+    persistTypedRunIfNeeded(typedRun.missionOutcome);
+  }
+  stopTypedTimer();
+  const gameArea = document.getElementById('game-area');
+  if (!gameArea) return;
+
+  const totalQuestions = typedRun.questions.length;
+  const accuracy = typedRun.totalAnswered > 0
+    ? Math.round((typedRun.totalCorrect / typedRun.totalAnswered) * 100)
+    : 0;
+  const summaryTitle = typedRun.missionOutcome === 'failed'
+    ? 'Typed Challenge Failed'
+    : 'Typed Challenge Complete';
+  const summaryLine = typedRun.missionOutcome === 'failed'
+    ? 'Hearts depleted. Review and retry to improve command fluency.'
+    : 'Run finished. Keep drilling until commands become muscle memory.';
+  const hasTypedSource = Number.isInteger(typedRun.sourceLevelIndex)
+    && typedRun.sourceLevelIndex >= 0
+    && typedRun.sourceLevelIndex < playableSourceLevels.length;
+
+  gameArea.innerHTML = `
+    <div class="card end-screen">
+      <h2>${summaryTitle}</h2>
+      <p class="end-summary">${summaryLine}</p>
+      <p>Level: ${escapeHtml(typedRun.levelTitle || 'N/A')}</p>
+      <p>Score: ${typedRun.score}</p>
+      <p>Accuracy: ${accuracy}%</p>
+      <p>Answered: ${typedRun.totalAnswered} / ${totalQuestions}</p>
+      <p>Longest streak: ${typedRun.maxStreak > 0 ? `🔥 ${typedRun.maxStreak}` : '—'}</p>
+      <div class="typed-actions">
+        ${hasTypedSource ? `<button class="btn show" onclick="startTypedChallenge(${typedRun.sourceLevelIndex})">Retry Typed Challenge ↺</button>` : ''}
+        <button class="btn typed-action-secondary" onclick="returnToMainChallenge()">Back to Main Challenge</button>
+      </div>
+    </div>`;
+}
+
+function renderMainDependencyBlocked(level) {
+  const gameArea = document.getElementById('game-area');
+  if (!gameArea) return;
+
+  gameArea.innerHTML = `
+    <div class="card failed-review-screen">
+      <h2>Challenge Flow Blocked</h2>
+      <p class="end-summary">No eligible next question could be selected for this level.</p>
+      <p>Likely cause: prerequisite cycle in this level's question graph.</p>
+      <div class="failed-review-actions">
+        <button class="btn show restart-btn" onclick="restartGame()">Restart Campaign ↺</button>
+        <button class="btn show restart-btn failed-review-secondary" onclick="startTypedChallenge(${levelIndex})">Run Typed Challenge →</button>
+      </div>
+      <p class="question-hit-ratio">Affected level: ${escapeHtml(level ? level.title : 'Unknown level')}</p>
+    </div>`;
+}
+
+function renderTypedChallenge() {
+  if (typedRun.missionOutcome === 'failed') {
+    renderTypedFailedReview();
+    updateHUD();
+    return;
+  }
+
+  if (typedRun.missionOutcome === 'complete') {
+    renderTypedRunSummary();
+    updateHUD();
+    return;
+  }
+
+  const sourceLevel = playableSourceLevels[typedRun.sourceLevelIndex] || null;
+  const q = getCurrentTypedQuestion();
+  if (!q || !sourceLevel) {
+    typedRun.missionOutcome = typedRun.questions.length === 0 ? 'complete' : typedRun.missionOutcome;
+    renderTypedRunSummary();
+    updateHUD();
+    return;
+  }
+
+  const gameArea = document.getElementById('game-area');
+  if (!gameArea) return;
+  const ctxHtml = q.context ? `<div class="question-context">${escapeHtml(q.context)}</div>` : '';
+  const metaHtml = renderMeta(sourceLevel, q);
+  const questionShortIdHtml = renderQuestionShortId(q);
+  const levelProgressPercent = Math.round(((typedRun.questionIndex + 1) / Math.max(typedRun.questions.length, 1)) * 100);
+  const questionLevelCounterHtml = `
+    <div class="question-level-counter" aria-label="Challenge position in typed command run">
+      <span class="qlc-label">Typed Challenge</span>
+      <span class="qlc-value">
+        <span class="qlc-current">${typedRun.questionIndex + 1}</span>
+        <span class="qlc-sep">/</span>
+        <span class="qlc-total">${typedRun.questions.length}</span>
+      </span>
+      <span class="qlc-track" aria-hidden="true">
+        <span class="qlc-fill" style="width: ${levelProgressPercent}%"></span>
+      </span>
+    </div>`;
+  const nextButtonLabel = typedRun.questionIndex >= typedRun.questions.length - 1
+    ? 'Finish Typed Run →'
+    : 'Next Typed Challenge →';
+  const nextActionButtonHtml = typedRun.answered
+    ? `<button class="btn show" onclick="nextTypedQuestion()">${nextButtonLabel}</button>`
+    : '';
+  const feedback = typedRun.lastSubmissionFeedback;
+  const feedbackClass = feedback
+    ? `feedback show ${feedback.correct ? 'good' : 'bad'}`
+    : 'feedback';
+  const feedbackHtml = feedback
+    ? `
+      <div class="feedback-header">${feedback.correct ? '✅ Correct command syntax' : '❌ Command mismatch'}</div>
+      <div class="feedback-body">
+        <div class="feedback-correct-box">
+          <strong>🛠️ Entered command:</strong>
+          ${escapeHtml(feedback.enteredCommand || '∅')}
+        </div>
+        <div class="feedback-correct-box">
+          <strong>✅ Correct command:</strong>
+          ${escapeHtml(feedback.correctCommand)}
+        </div>
+        <div class="feedback-correct-box">
+          <strong>⏱️ Next question budget:</strong>
+          ${formatSignedTimerSeconds(feedback.nextQuestionTimeSec)}
+        </div>
+      </div>`
+    : '';
+
+  gameArea.innerHTML = `
+    <div class="card question-card typed-command-card">
+      ${metaHtml}
+      <div class="badge-row">
+        <span class="question-type question-type-command">
+          <span class="question-type-kicker">Mode</span>
+          <span class="question-type-name">Typed Command</span>
+        </span>
+      </div>
+      ${questionLevelCounterHtml}
+      <div class="typed-timer-row">
+        <span class="typed-timer-label">Timer</span>
+        <span id="typed-timer-value" class="typed-timer-value ${getTypedTimerToneClass(typedRun.currentRemainingSec)}">${formatSignedTimerSeconds(typedRun.currentRemainingSec)}</span>
+      </div>
+      <div class="question-text">${escapeHtml(q.q)}</div>
+      ${ctxHtml}
+      <div class="typed-input-row">
+        <input
+          id="typed-command-input"
+          class="typed-command-input"
+          type="text"
+          placeholder="Type full kubectl command..."
+          autocomplete="off"
+          spellcheck="false"
+          onkeydown="handleTypedCommandInputKeydown(event)"
+          ${typedRun.answered ? 'disabled' : ''}
+        />
+        <button class="cmd-action-btn cmd-action-primary" onclick="submitTypedCommand()" ${typedRun.answered ? 'disabled' : ''}>
+          Submit Command ✓
+        </button>
+      </div>
+      <div class="${feedbackClass} typed-feedback" id="typed-feedback">
+        ${feedbackHtml}
+      </div>
+      <div class="typed-actions">
+        ${nextActionButtonHtml}
+        <button class="btn typed-action-secondary" onclick="returnToMainChallenge()">Return to Main Challenge</button>
+      </div>
+      ${questionShortIdHtml}
+    </div>`;
+
+  if (!typedRun.answered) {
+    const input = document.getElementById('typed-command-input');
+    if (input) input.focus();
+    if (typedRun.timerIntervalId === null) {
+      startTypedQuestionTimer();
+    } else {
+      updateTypedTimerDisplay();
+    }
+  } else {
+    stopTypedTimer();
+    updateTypedTimerDisplay();
+  }
+
+  updateHUD();
+}
+
 function render() {
+  if (runHistoryViewActive) {
+    renderRunHistoryScreen();
+    return;
+  }
+
+  if (activeChallengeMode === CHALLENGE_MODE_TYPED) {
+    renderTypedChallenge();
+    return;
+  }
+
   if (missionOutcome === 'failed') {
     showFailedReview();
     return;
@@ -921,8 +2214,22 @@ function render() {
   }
 
   const level = getCurrentLevel();
+  const runtime = ensureMainLevelRuntime(level);
   const q = getCurrentQuestion();
-  if (!level || !q) {
+  if (!level) {
+    showEnd();
+    return;
+  }
+  if (!q) {
+    if (runtime.hardBlocked) {
+      updateHUD();
+      renderMainDependencyBlocked(level);
+      return;
+    }
+    if (questionIndex >= level.questions.length) {
+      showLevelComplete(level);
+      return;
+    }
     showEnd();
     return;
   }
@@ -938,6 +2245,7 @@ function render() {
   const gameArea = document.getElementById('game-area');
   const ctxHtml = q.context ? `<div class="question-context">${escapeHtml(q.context)}</div>` : '';
   const metaHtml = renderMeta(level, q);
+  const questionShortIdHtml = renderQuestionShortId(q);
   const journeyHtml = ENABLE_JOURNEY_GAMIFICATION ? renderJourneyStrip(q) : '';
   const questionBadgeHtml = `
     <div class="badge-row">
@@ -986,6 +2294,7 @@ function render() {
         </div>
         <div class="feedback" id="feedback"></div>
         <button class="btn" id="next-btn" onclick="nextQ()">Next Challenge →</button>
+        ${questionShortIdHtml}
       </div>`;
   } else if (q.type === 'command') {
     tokenPool = [...q.tokens].sort(() => Math.random() - 0.5);
@@ -1010,6 +2319,7 @@ function render() {
         </div>
         <div class="feedback" id="feedback"></div>
         <button class="btn" id="next-btn" onclick="nextQ()">Next Challenge →</button>
+        ${questionShortIdHtml}
       </div>`;
   } else {
     gameArea.innerHTML = `
@@ -1027,11 +2337,13 @@ function render() {
         </div>
         <div class="feedback" id="feedback"></div>
         <button class="btn" id="next-btn" onclick="nextQ()">Next Challenge →</button>
+        ${questionShortIdHtml}
       </div>`;
   }
 }
 
 function answerQuiz(displayIdx) {
+  if (activeChallengeMode !== CHALLENGE_MODE_MAIN) return;
   if (answered) return;
   answered = true;
   const origIdx = optionMap[displayIdx];
@@ -1050,6 +2362,7 @@ function answerQuiz(displayIdx) {
 }
 
 function answerScenario(displayIdx) {
+  if (activeChallengeMode !== CHALLENGE_MODE_MAIN) return;
   if (answered) return;
   answered = true;
   const origIdx = optionMap[displayIdx];
@@ -1068,6 +2381,7 @@ function answerScenario(displayIdx) {
 }
 
 function addToken(token, idx) {
+  if (activeChallengeMode !== CHALLENGE_MODE_MAIN) return;
   if (usedTokens.has(idx)) return;
   const tokenEl = document.getElementById(`pt${idx}`);
   if (!tokenEl) return;
@@ -1079,6 +2393,7 @@ function addToken(token, idx) {
 }
 
 function addTokenByIndex(idx) {
+  if (activeChallengeMode !== CHALLENGE_MODE_MAIN) return;
   if (idx < 0 || idx >= tokenPool.length) return;
   addToken(tokenPool[idx], idx);
 }
@@ -1098,6 +2413,7 @@ function renderCmd() {
 }
 
 function removeToken(i) {
+  if (activeChallengeMode !== CHALLENGE_MODE_MAIN) return;
   const removed = cmdBuilt.splice(i, 1)[0];
   if (!removed) return;
 
@@ -1108,6 +2424,7 @@ function removeToken(i) {
 }
 
 function resetCmd() {
+  if (activeChallengeMode !== CHALLENGE_MODE_MAIN) return;
   cmdBuilt = [];
   usedTokens = new Set();
   document.querySelectorAll('.pool-token').forEach(token => token.classList.remove('used'));
@@ -1115,6 +2432,7 @@ function resetCmd() {
 }
 
 function checkCommand() {
+  if (activeChallengeMode !== CHALLENGE_MODE_MAIN) return;
   if (answered) return;
   const q = getCurrentQuestion();
   if (!q) return;
@@ -1125,41 +2443,228 @@ function checkCommand() {
   handleResult(correct, q, -1, built);
 }
 
-function handleResult(correct, question, chosenIdx, builtCmd) {
-  totalAnswered++;
-  recordQuestionTodayResult(question, correct);
+function handleTypedCommandInputKeydown(event) {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  if (typedRun.answered) {
+    nextTypedQuestion();
+    return;
+  }
+  submitTypedCommand();
+}
 
-  if (correct) {
-    score += 10 + (streak * 2);
-    streak++;
-    totalCorrect++;
-    maxStreak = Math.max(maxStreak, streak);
+function startTypedChallenge(sourceLevelIndexOverride) {
+  closeQuickMenu();
+  if (activeChallengeMode === CHALLENGE_MODE_TYPED && !typedRun.historySaved) {
+    const currentOutcome = typedRun.missionOutcome === 'running'
+      ? 'aborted'
+      : typedRun.missionOutcome;
+    persistTypedRunIfNeeded(currentOutcome);
+  }
+
+  runHistoryViewActive = false;
+  const fallbackLevelIndex = directQuestionMode && Number.isInteger(directQuestionSourceLevelIndex)
+    ? Math.max(0, Math.min(directQuestionSourceLevelIndex, playableSourceLevels.length - 1))
+    : Math.max(0, Math.min(levelIndex, playableSourceLevels.length - 1));
+  const sourceLevelIndex = Number.isInteger(sourceLevelIndexOverride)
+    ? sourceLevelIndexOverride
+    : fallbackLevelIndex;
+  const sourceLevel = playableSourceLevels[sourceLevelIndex] || null;
+  if (!sourceLevel) return;
+
+  const challengeConfig = normalizeChallengeConfig(sourceLevel.challengeConfig);
+  const commandQuestions = sourceLevel.questions.filter(question => question.type === 'command');
+  const sampledTypedQuestions = sampleQuestions(commandQuestions, challengeConfig.typedPickCount)
+    .map(cloneQuestionForRun);
+  fisherYatesShuffle(sampledTypedQuestions);
+
+  stopTypedTimer();
+  typedRun = {
+    sourceLevelIndex,
+    levelId: sourceLevel.id,
+    levelTitle: sourceLevel.title,
+    levelDifficulty: sourceLevel.difficulty,
+    questions: sampledTypedQuestions,
+    questionIndex: 0,
+    score: 0,
+    lives: 3,
+    streak: 0,
+    maxStreak: 0,
+    totalAnswered: 0,
+    totalCorrect: 0,
+    answered: false,
+    missionOutcome: sampledTypedQuestions.length > 0 ? 'running' : 'complete',
+    baseQuestionTimeSec: challengeConfig.baseQuestionTimeSec,
+    carryFromPreviousSec: 0,
+    currentQuestionTimeSec: challengeConfig.baseQuestionTimeSec,
+    questionStartedAtMs: 0,
+    currentRemainingSec: challengeConfig.baseQuestionTimeSec,
+    timerIntervalId: null,
+    lastSubmissionFeedback: null,
+    runStartedAtMs: Date.now(),
+    runEndedAtMs: 0,
+    historySaved: false,
+    failedReviewItems: []
+  };
+
+  activeChallengeMode = CHALLENGE_MODE_TYPED;
+  updateHUD();
+  render();
+}
+
+function submitTypedCommand() {
+  if (activeChallengeMode !== CHALLENGE_MODE_TYPED) return;
+  if (typedRun.missionOutcome !== 'running') return;
+  if (typedRun.answered) return;
+
+  const question = getCurrentTypedQuestion();
+  if (!question) return;
+
+  const input = document.getElementById('typed-command-input');
+  const enteredCommand = input ? input.value : '';
+  const normalizedEntered = canonicalizeTypedCommand(enteredCommand);
+  const correctCommand = getCommandAnswerText(question);
+  const normalizedCorrect = canonicalizeTypedCommand(correctCommand);
+  const isCorrect = normalizedEntered === normalizedCorrect;
+  const elapsedSec = typedRun.questionStartedAtMs > 0
+    ? (Date.now() - typedRun.questionStartedAtMs) / 1000
+    : 0;
+  const remainingSec = typedRun.currentQuestionTimeSec - elapsedSec;
+
+  typedRun.currentRemainingSec = remainingSec;
+  typedRun.answered = true;
+  typedRun.totalAnswered++;
+  recordQuestionTodayResult(question, isCorrect);
+
+  if (isCorrect) {
+    typedRun.score += 10 + (typedRun.streak * 2);
+    typedRun.streak++;
+    typedRun.totalCorrect++;
+    typedRun.maxStreak = Math.max(typedRun.maxStreak, typedRun.streak);
+    typedRun.carryFromPreviousSec = remainingSec;
   } else {
-    addFailedReviewItem(question, chosenIdx, builtCmd);
-    lives = Math.max(0, lives - 1);
-    streak = 0;
+    addTypedFailedReviewItem(question, enteredCommand);
+    typedRun.lives = Math.max(0, typedRun.lives - 1);
+    typedRun.streak = 0;
+    typedRun.carryFromPreviousSec = 0;
+  }
+
+  typedRun.lastSubmissionFeedback = {
+    correct: isCorrect,
+    enteredCommand: canonicalizeTypedCommand(enteredCommand),
+    correctCommand: normalizedCorrect,
+    remainingSec,
+    nextQuestionTimeSec: typedRun.baseQuestionTimeSec + typedRun.carryFromPreviousSec
+  };
+
+  stopTypedTimer();
+  if (!isCorrect && typedRun.lives <= 0) {
+    typedRun.missionOutcome = 'failed';
+    persistTypedRunIfNeeded('failed');
+  }
+
+  updateHUD();
+  render();
+}
+
+function nextTypedQuestion() {
+  if (activeChallengeMode !== CHALLENGE_MODE_TYPED) return;
+  if (!typedRun.answered) return;
+
+  if (typedRun.missionOutcome === 'failed') {
+    render();
+    return;
+  }
+
+  if (typedRun.questionIndex >= typedRun.questions.length - 1) {
+    typedRun.missionOutcome = 'complete';
+    persistTypedRunIfNeeded('complete');
+    stopTypedTimer();
+    render();
+    return;
+  }
+
+  typedRun.questionIndex++;
+  typedRun.answered = false;
+  typedRun.lastSubmissionFeedback = null;
+  typedRun.currentQuestionTimeSec = typedRun.baseQuestionTimeSec + typedRun.carryFromPreviousSec;
+  typedRun.questionStartedAtMs = 0;
+  typedRun.currentRemainingSec = typedRun.currentQuestionTimeSec;
+  stopTypedTimer();
+  render();
+}
+
+function returnToMainChallenge() {
+  if (activeChallengeMode !== CHALLENGE_MODE_TYPED) {
+    runHistoryViewActive = false;
+    render();
+    return;
+  }
+
+  const leaveOutcome = typedRun.missionOutcome === 'running'
+    ? 'aborted'
+    : typedRun.missionOutcome;
+  persistTypedRunIfNeeded(leaveOutcome);
+  stopTypedTimer();
+  runHistoryViewActive = false;
+  activeChallengeMode = CHALLENGE_MODE_MAIN;
+  updateHUD();
+  render();
+}
+
+function handleResult(correct, question, chosenIdx, builtCmd) {
+  if (activeChallengeMode !== CHALLENGE_MODE_MAIN) return;
+  const isReviewMode = directQuestionMode;
+
+  const level = getCurrentLevel();
+  if (!isReviewMode) {
+    const runtime = ensureMainLevelRuntime(level);
+    if (question && typeof question.id === 'string' && question.id) {
+      runtime.answeredIds.add(question.id);
+    }
+
+    totalAnswered++;
+    recordQuestionTodayResult(question, correct);
+
+    if (correct) {
+      score += 10 + (streak * 2);
+      streak++;
+      totalCorrect++;
+      maxStreak = Math.max(maxStreak, streak);
+    } else {
+      addFailedReviewItem(question, chosenIdx, builtCmd);
+      lives = Math.max(0, lives - 1);
+      streak = 0;
+    }
   }
 
   updateHUD();
   showFeedback(correct, question, chosenIdx, builtCmd);
 
   const nextBtn = document.getElementById('next-btn');
-  const hasLivesLeft = lives > 0;
+  const hasLivesLeft = isReviewMode || lives > 0;
   if (nextBtn && hasLivesLeft) {
-    const level = getCurrentLevel();
-    const isLevelLastQuestion = level && questionIndex === level.questions.length - 1;
-    if (isLevelLastQuestion && question.isBoss) {
-      nextBtn.textContent = 'Claim Badge →';
+    if (isReviewMode) {
+      nextBtn.textContent = 'Leave Review →';
     } else {
-      nextBtn.textContent = 'Next Challenge →';
+      const isLevelLastQuestion = level && questionIndex === level.questions.length - 1;
+      if (isLevelLastQuestion && question.isBoss) {
+        nextBtn.textContent = 'Claim Badge →';
+      } else {
+        nextBtn.textContent = 'Next Challenge →';
+      }
     }
     nextBtn.classList.add('show');
   }
 
-  if (!correct && lives <= 0) {
+  if (!isReviewMode && !correct && lives <= 0) {
     failedLevelIndex = levelIndex;
     missionOutcome = 'failed';
-    setTimeout(() => showFailedReview(), 2800);
+    setTimeout(() => {
+      if (activeChallengeMode === CHALLENGE_MODE_MAIN && missionOutcome === 'failed') {
+        showFailedReview();
+      }
+    }, 2800);
   }
 }
 
@@ -1167,6 +2672,7 @@ function showFeedback(correct, question, chosenIdx, builtCmd) {
   const feedback = document.getElementById('feedback');
   if (!feedback) return;
   const journeyTheme = ENABLE_JOURNEY_GAMIFICATION ? getJourneyTheme(question) : null;
+  const isReviewMode = directQuestionMode;
 
   feedback.className = `feedback show ${correct ? 'good' : 'bad'}`;
 
@@ -1196,19 +2702,31 @@ function showFeedback(correct, question, chosenIdx, builtCmd) {
     }
   }
 
+  const tipHtml = question.tip
+    ? renderFoldableFeedbackBlock(
+      'feedback-tip',
+      '🐹 Go Tip:',
+      `<pre class="feedback-code">${escapeHtml(question.tip)}</pre>`
+    )
+    : '';
+
   const deepDiveHtml = question.deepDive
-    ? `
-      <div class="feedback-deep-dive">
-        <strong>🔬 Deep Dive:</strong>
-        <pre class="feedback-code">${formatRichTextWithLinks(question.deepDive)}</pre>
-      </div>`
+    ? renderFoldableFeedbackBlock(
+      'feedback-deep-dive',
+      '🔬 Deep Dive:',
+      `<pre class="feedback-code">${formatRichTextWithLinks(question.deepDive)}</pre>`
+    )
     : '';
 
   const bossHtml = question.isBoss
-    ? `<div class="feedback-boss-note">${correct ? '🏁 Boss defeated. Badge unlocked after this step.' : '⚠️ Boss challenge missed. You can still continue if you have lives left.'}</div>`
+    ? `<div class="feedback-boss-note">${isReviewMode
+      ? 'Review mode: boss questions do not award badges here.'
+      : (correct ? '🏁 Boss defeated. Badge unlocked after this step.' : '⚠️ Boss challenge missed. You can still continue if you have lives left.')}</div>`
     : '';
 
-  const feedbackHeaderHtml = ENABLE_JOURNEY_GAMIFICATION && journeyTheme
+  const feedbackHeaderHtml = isReviewMode
+    ? (correct ? '✅ Correct' : '❌ Not quite — learn from this!')
+    : (ENABLE_JOURNEY_GAMIFICATION && journeyTheme
     ? `
       <span class="feedback-mode-icon">${journeyTheme.icon}</span>
       ${correct
@@ -1216,7 +2734,7 @@ function showFeedback(correct, question, chosenIdx, builtCmd) {
         : `❌ ${escapeHtml(journeyTheme.fail)} Keep learning.`}`
     : (correct
       ? `✅ Correct! +${10 + Math.max(0, (streak - 1) * 2)} pts`
-      : '❌ Not quite — learn from this!');
+      : '❌ Not quite — learn from this!'));
 
   feedback.innerHTML = `
     <div class="feedback-header">
@@ -1226,17 +2744,26 @@ function showFeedback(correct, question, chosenIdx, builtCmd) {
       ${wrongReasonHtml}
       ${correctAnswerHtml}
       <div class="feedback-explain">${escapeHtml(question.explain)}</div>
-      <div class="feedback-tip">
-        <strong>🐹 Go Tip:</strong>
-        <pre class="feedback-code">${escapeHtml(question.tip)}</pre>
-      </div>
+      ${tipHtml}
       ${deepDiveHtml}
       ${bossHtml}
     </div>`;
 }
 
 function nextQ() {
+  if (activeChallengeMode === CHALLENGE_MODE_TYPED) {
+    nextTypedQuestion();
+    return;
+  }
+
   if (!answered) return;
+  if (directQuestionMode) {
+    const targetLevelIndex = Number.isInteger(directQuestionSourceLevelIndex)
+      ? directQuestionSourceLevelIndex
+      : 0;
+    startNormalMainRunAtLevel(targetLevelIndex);
+    return;
+  }
   if (missionOutcome === 'failed' || lives <= 0) {
     showFailedReview();
     return;
@@ -1252,7 +2779,8 @@ function nextQ() {
     return;
   }
 
-  reprioritizeRemainingQuestions(level, questionIndex);
+  const runtime = ensureMainLevelRuntime(level);
+  runtime.currentQuestionId = null;
   questionIndex++;
   if (questionIndex >= level.questions.length) {
     if (!completedBadges.some(badge => badge.levelId === level.id)) {
@@ -1293,6 +2821,11 @@ function showLevelComplete(level) {
 }
 
 function startNextLevel() {
+  if (activeChallengeMode === CHALLENGE_MODE_TYPED) {
+    returnToMainChallenge();
+    return;
+  }
+
   if (missionOutcome === 'failed' || lives <= 0) {
     showFailedReview();
     return;
@@ -1306,6 +2839,7 @@ function startNextLevel() {
     return;
   }
 
+  resetMainLevelRuntime(levels[levelIndex]);
   render();
 }
 
@@ -1316,6 +2850,7 @@ function showEnd() {
   }
 
   missionOutcome = 'complete';
+  persistMainRunIfNeeded('complete');
   document.getElementById('progress').style.width = '100%';
 
   let rank;
@@ -1392,6 +2927,26 @@ function showEnd() {
 }
 
 function restartGame() {
+  if (activeChallengeMode === CHALLENGE_MODE_TYPED && !typedRun.historySaved) {
+    const leaveOutcome = typedRun.missionOutcome === 'running'
+      ? 'aborted'
+      : typedRun.missionOutcome;
+    persistTypedRunIfNeeded(leaveOutcome);
+  }
+  if (activeChallengeMode === CHALLENGE_MODE_MAIN) {
+    const mainLeaveOutcome = missionOutcome === 'failed'
+      ? 'failed'
+      : (missionOutcome === 'complete' ? 'complete' : 'aborted');
+    persistMainRunIfNeeded(mainLeaveOutcome);
+  }
+
+  runHistoryViewActive = false;
+  activeChallengeMode = CHALLENGE_MODE_MAIN;
+  directQuestionMode = false;
+  directQuestionSourceLevelIndex = -1;
+  clearQuestionHash();
+  resetTypedRunState();
+  rebuildMainRun();
   levelIndex = 0;
   questionIndex = 0;
   score = 0;
@@ -1410,11 +2965,30 @@ function restartGame() {
   missionOutcome = 'in_progress';
   failedReviewItems = [];
   failedLevelIndex = null;
+  beginNewMainRun();
 
+  resetMainLevelRuntime(levels[levelIndex]);
+  updateStaticLabels();
+  populateLevelSelector();
   updateHUD();
   render();
 }
 
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', event => {
+    const menu = document.getElementById('quick-menu');
+    if (!menu) return;
+    if (menu.contains(event.target)) return;
+    closeQuickMenu();
+  });
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('hashchange', handleQuestionHashChange);
+}
+
 updateStaticLabels();
 populateLevelSelector();
-render();
+if (!handleQuestionHashChange()) {
+  render();
+}
