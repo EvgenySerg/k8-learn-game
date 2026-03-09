@@ -1,203 +1,274 @@
 # KubeCraft App Research Document
 
-## 1) What this app is
-KubeCraft is a **single-page, browser-based educational game** for learning Kubernetes in a practical, operator-style format.
+Repository snapshot analyzed on March 9, 2026 from the current workspace state.
 
-It combines:
-- Multiple-choice quizzes
-- Incident-response scenarios
-- Command-building exercises (`kubectl` token assembly)
+## 1) Executive Summary
+KubeCraft is a static, browser-based Kubernetes learning app built with plain HTML, CSS, and JavaScript. It is no longer just a small 6-level prototype. The repository now contains a 21-level campaign structure, with 8 playable levels implemented and 13 future levels defined as roadmap placeholders.
 
-The app is branded as **"Kubernetes Mission Control"** and explicitly positioned as a **Go developer edition** of Kubernetes learning.
+The current product is best described as a:
+- Single-player learning game
+- Kubernetes skills trainer with mixed interaction modes
+- Lightweight learning engine with local persistence
 
-## 2) Who this app is for
-Primary audience:
-- Go backend developers moving into Kubernetes operations
-- Junior-to-mid platform engineers
-- DevOps/SRE learners preparing for real cluster troubleshooting
+It is not yet a full LMS. There is still no backend, identity layer, cohort management, or instructor analytics.
 
-Secondary audience:
-- Team leads who want an internal onboarding mini-course
-- Bootcamp/instructor-led training programs that need interactive drills
+## 2) What Was Already Done
+The following is already implemented in the codebase:
 
-Skill span:
-- Beginner to Expert (6 levels of increasing difficulty)
+- A static SPA shell in `k8s-game.html`
+- A custom visual UI and responsive layout in `k8s-game.css`
+- A central game runtime in `k8s-game.js`
+- A modular content structure split across `data/levels/*.js`
+- A main challenge mode that mixes quiz, scenario, and command-builder items
+- A separate typed command mode with its own timer, score, streak, and hearts
+- Local run history persistence via `localStorage`
+- Daily weak-question tracking that reprioritizes low hit-ratio questions
+- Failed-review screens for both main and typed runs
+- Level selector / jump navigation
+- Runtime-generated question tags, short IDs, and metadata chips
+- Direct-question deep linking through URL hash short IDs
+- Support in the engine for prerequisites and per-level challenge configuration
 
-## 3) Product type and LMS positioning
-Current form:
-- A **self-contained learning game**, not a full LMS
+This means the app has moved beyond a simple quiz deck. It now has meaningful training-loop features and a clearer campaign architecture.
 
-What it already does well:
-- Structured curriculum progression
-- Immediate formative feedback
-- Gamification (score, lives, streaks, badges, rank)
-- Applied operational context (incidents, rollbacks, RBAC checks, networking diagnosis)
+## 3) What Is Only Partially Done
+Several capabilities exist in the engine but are not yet meaningfully adopted in the content:
 
-What it does **not** currently include (typical LMS capabilities):
-- User accounts/authentication
-- Progress persistence across sessions/devices
-- Instructor dashboard/analytics
-- Assignments/cohorts/certificates
-- SCORM/xAPI/LTI integration
+- Prerequisite flow is supported in code, but no current question authoring uses `requires`
+- Runtime supports question IDs and short IDs, but source content mostly relies on generated IDs rather than explicit authored IDs
+- Per-level `challengeConfig` is supported, but current level files do not override defaults
+- Journey/fantasy-style gamification assets exist, but `ENABLE_JOURNEY_GAMIFICATION` is disabled
+- The level roadmap is broad, but content coverage is still uneven inside the active campaign
 
-Conclusion:
-- This is best categorized as a **learning module/engine** that could be embedded into an LMS ecosystem.
+Important nuance:
+- Levels 0-4 are content-complete against their current `targetQuestionCount`
+- Levels 5-7 are marked `active` but are underfilled relative to their stated targets
 
-## 4) Curriculum and learning design
-Total content:
-- 44 challenges
-- 12 topic sections
-- 6 levels
-- Question types: 27 quiz, 7 scenario, 10 command-builder
+## 4) What Is Not Done Yet
+These items are still absent from the repository:
 
-Topic coverage:
-- Pods & Workloads
-- Services & Networking
-- Storage & Config
-- Deployments & Rollouts
-- Scheduling & Policy
-- Autoscaling
-- RBAC & Security
-- Operators & CRDs
-- Observability
-- Advanced Topics
-- Helm & GitOps
-- Ingress & TLS
+- User accounts or authentication
+- Cross-device persistence or cloud sync
+- True save/resume for an in-progress campaign run
+- Instructor dashboard or cohort analytics
+- SCORM, xAPI, or LTI integration
+- Authoring UI for SMEs or instructors
+- Schema validation pipeline for content
+- Automated tests
+- CI-visible quality checks inside this repo
+- Complete authored content for levels 8-20
+- A true adaptive mastery model beyond simple daily weak-question reprioritization
 
-Pedagogical pattern per challenge:
-- Prompt/question
-- Operational context snippet
-- Learner response
-- Immediate correctness feedback
-- Why-answer-explanation
-- "Go tip" applied engineering advice
-- "Deep Dive" extension material
+## 5) Current Content Footprint
 
-This is a strong **microlearning + deliberate practice** model with realistic production-oriented framing.
+### Implemented campaign totals
+- 21 level definition files
+- 8 active playable levels
+- 13 planned placeholder levels
+- 137 authored questions currently in the repo
+- Question mix:
+  - 71 quiz
+  - 32 scenario
+  - 34 command
 
-## 5) Game progression structure
-Level model:
-1. Level 1: Cluster Rookie (Beginner) - 9 challenges
-2. Level 2: Runtime Defender (Beginner+) - 7 challenges
-3. Level 3: Availability Engineer (Intermediate) - 5 challenges
-4. Level 4: Control Plane Specialist (Intermediate+) - 9 challenges
-5. Level 5: Platform Operator (Advanced) - 5 challenges
-6. Level 6: Kubernetes Mastermind (Expert) - 9 challenges
+### Active level inventory
 
-Mechanics:
-- 3 lives system
-- Streak-based bonus scoring
-- Boss challenge in each level
-- Badge unlocked per completed level
-- End-of-run rank based on score bands
+| Level | Difficulty | Status | Questions | Target | Notes |
+| --- | --- | --- | ---: | ---: | --- |
+| Level 0 · Mission Briefing | Absolute Beginner | Active | 21 | 21 | New beginner onboarding track |
+| Level 1 · Cluster Rookie | Beginner | Active | 21 | 21 | Complete vs current target |
+| Level 2 · Runtime Defender | Beginner+ | Active | 20 | 20 | Complete vs current target |
+| Level 3 · Availability Engineer | Intermediate | Active | 20 | 20 | Complete vs current target |
+| Level 4 · Control Plane Specialist | Intermediate+ | Active | 24 | 24 | Complete vs current target |
+| Level 5 · Platform Operator | Advanced | Active | 5 | 24 | Large content gap |
+| Level 6 · Kubernetes Mastermind | Expert | Active | 9 | 24 | Large content gap |
+| Level 7 · CKA Core Foundations | Expert Foundations | Active | 17 | 28 | Partial implementation |
 
-Progress UX:
-- HUD: score, lives, streak, level, question counter, badges
-- Global progress bar
-- Level completion screens
-- End-of-mission summary + suggested learning path
+### Active campaign gap
+- Active levels currently contain 137 questions
+- Their combined target count is 182
+- Current shortfall inside already-active levels: 45 questions
 
-## 6) Technical architecture
-Architecture style:
-- **Static frontend app** (no backend)
-- Vanilla HTML/CSS/JavaScript
-- Data-driven content via in-browser question dataset
+### Planned roadmap levels
+Levels 8-20 already exist as metadata shells with title, badge, description, focus areas, and target counts, but `questions: []` today.
 
-Codebase structure:
-- `/Users/evgenysergienko/Downloads/k8s-game-app/k8s-game.html`
-  - App shell + HUD + container for dynamic rendering
-- `/Users/evgenysergienko/Downloads/k8s-game-app/k8s-game.css`
-  - UI system, responsive layout, gamified visual language
-- `/Users/evgenysergienko/Downloads/k8s-game-app/k8s-game.js`
-  - Runtime engine, state management, rendering, scoring, progression logic
-- `/Users/evgenysergienko/Downloads/k8s-game-app/k8s-game-data.js`
-  - Curriculum content (question bank with explanation layers)
+Planned themes include:
+- Workload engineering
+- Networking internals and CNI
+- Storage and stateful platforms
+- Security baselines
+- RBAC, identity, and policy
+- Observability engineering
+- Performance and cost optimization
+- CI/CD and release engineering
+- GitOps at scale
+- Multi-cluster operations
+- Disaster recovery
+- Service mesh and zero trust
+- Kubernetes war games
 
-Runtime flow:
-1. Load question dataset from `window.KUBECRAFT_QUESTIONS`
-2. Enrich questions with grouping and dynamic tags
-3. Build level objects from blueprint + question indexes
-4. Render challenge UI by question type
-5. Evaluate answer, compute score/life/streak changes
-6. Show pedagogical feedback
-7. Advance challenge/level/end state
+## 6) Audience and Positioning
+The earlier framing of "Go developer edition" is directionally true, but too narrow for the current repo.
 
-## 7) Data model and content engineering
-Question schema includes:
-- `type` (`quiz`, `scenario`, `command`)
-- `q` (prompt)
-- `context` (code/incident snippet)
-- `options` (for quiz/scenario)
-- `tokens` (for command-builder)
+More accurate audience definition:
+- Kubernetes beginners who need strong conceptual onboarding
+- Go developers moving into platform or operations work
+- SRE / DevOps / platform engineering learners
+- CKA-adjacent learners for core operational drills
+
+Why the Go angle still matters:
+- Many questions include "Go tip" sections
+- Incidents frequently reference Go services, client-go, controllers, and operator workflows
+- The content is Kubernetes-first, but developer ergonomics are clearly tuned toward Go practitioners
+
+## 7) Learning Design Assessment
+
+### What the learning design does well
+- Uses varied practice modes instead of only multiple-choice recall
+- Combines conceptual questions, incident-response decisions, and command fluency drills
+- Gives immediate corrective feedback with explanation, wrong-answer reasoning, tip, and deep-dive layers
+- Uses boss challenges to create milestone moments at the level boundary
+- Adds typed command practice, which is closer to real terminal recall than token clicking
+- Stores failed items for post-run review, which improves remediation value
+- Uses focus areas and generated tags to make each question feel anchored in a skill domain
+
+From an e-learning perspective, this is a good blend of:
+- Retrieval practice
+- Immediate feedback
+- Scenario-based learning
+- Progressive challenge
+- Procedural fluency training
+
+### Where the learning design is still weak
+- No explicit learning objectives per level or per question
+- No authored prerequisite map in actual content
+- No spaced repetition system across days beyond weak-question reprioritization
+- Typed mode is useful, but it is still a side drill rather than part of a broader mastery path
+- No learner profile, diagnostic pretest, or role-based pathway
+- No assessment reporting beyond local history tables
+
+## 8) Technical Architecture
+
+### Architecture style
+- Static frontend only
+- No build system
+- No module bundler
+- No backend API
+- All state handled client-side in one main script
+
+### File structure
+- `k8s-game.html`
+  - Shell, HUD, level selector, challenge-mode controls, game container
+- `k8s-game.css`
+  - Styling for the mission-control interface, typed mode, history tables, review screens
+- `k8s-game.js`
+  - Runtime normalization, sampling, scoring, rendering, persistence, history, typed-mode logic
+- `k8s-game-data.js`
+  - Group catalog and topic taxonomy
+- `data/levels/*.js`
+  - Per-level authored content and metadata
+
+### Runtime behavior
+The app now does more than render a fixed question list. It:
+
+1. Loads a level roadmap from many `data/levels/*.js` files
+2. Normalizes level metadata and question metadata at runtime
+3. Generates tags from content text
+4. Builds a playable main campaign run
+5. Samples command questions for a separate typed drill mode
+6. Tracks score, lives, streak, badges, and run outcomes
+7. Saves run history and daily question hit ratios locally
+8. Supports direct review of a single question via hash-based short IDs
+
+## 9) Data Model and Content Engineering
+The old document described a single question bank. That is now outdated.
+
+### Actual content model today
+Question authoring includes:
+- `type`
+- `q`
+- `context`
+- `options` for quiz/scenario
+- `tokens` for command builder
 - `answer`
 - `explain`
-- `wrongReasons` (targeted misconception feedback)
-- `tip` (Go-specific practical tip)
-- `deepDive` (extended instruction)
+- `wrongReasons`
+- `tip`
+- `deepDive`
+- `groupId`
+- optional boss flag
 
-Strengths of this schema:
-- Supports both assessment and teaching in a single interaction
-- Encodes remediation paths for wrong answers
-- Keeps content authoring extensible without engine changes
+### Runtime-enriched fields
+During normalization, the engine adds or derives:
+- `id`
+- `shortId`
+- `tags`
+- `groupLabel`
+- `levelId`
+- `levelTitle`
+- `levelDifficulty`
+- optional prerequisite handling support
 
-## 8) UX and interaction design
-Notable UX qualities:
-- Clear mission-control visual identity
-- Good information density in HUD without clutter
-- Distinct visual treatment for each challenge type
-- Immediate, rich feedback blocks improve retention
-- Mobile adaptation for scenario options
+### Important content-authoring observation
+The runtime is ahead of the data model:
+- The engine is ready for authored IDs and prerequisites
+- The actual authored level content is not using them yet
 
-Potential UX risks:
-- Long feedback blocks may feel heavy on small screens
-- Single-run flow with no save/resume may reduce completion rate for longer sessions
+This is important for documentation accuracy. The feature exists as platform capability, not as an active curriculum design pattern.
 
-## 9) Strengths from software architecture and learning strategy lens
-- Clean separation of concerns: view shell, style system, engine logic, content data
-- Fully portable deployment (can host on any static web server/CDN)
-- Fast startup and low runtime complexity
-- High educational signal via incident-driven scenarios
-- Strong bridge between conceptual Kubernetes and real command-line operations
+## 10) UX and Interaction Design
 
-## 10) Key limitations and scale risks
-Product limitations:
-- No identity, persistence, cohort management, or analytics
-- No adaptive learning path per learner profile/performance
-- No authoring UI (content edited directly in JS file)
+### Current strengths
+- Strong mission-control / training-console visual language
+- HUD makes score, lives, streak, level, and progress visible
+- Fast flow with low friction because there is no account/login step
+- Good separation between main mixed-mode play and typed command drills
+- Run history is easy to access from the quick menu
+- Failed-review screens convert mistakes into study material
 
-Engineering limitations:
-- Global mutable state in one script can become hard to maintain at larger scale
-- Inline `onclick` handlers limit component reuse and testability
-- No automated tests or CI-visible quality guardrails in current package
+### Current risks
+- Main script remains large and highly stateful
+- Inline `onclick` handlers are still widely used
+- Very large feedback blocks may feel dense on smaller screens
+- Direct-question deep links are useful, but there is no teacher-facing share workflow around them
+- Planned levels are visible in the codebase but not actually playable, so roadmap expectations need to stay explicit
 
-## 11) Recommended evolution roadmap (toward LMS-ready platform)
-Phase 1: Stabilize learning engine
-- Extract state + scoring logic into testable modules
-- Add local persistence (`localStorage`) for resume and progress memory
-- Introduce basic telemetry events (question answered, fail reason, time-to-answer)
+## 11) Repository-Accurate Product Assessment
+KubeCraft is now better understood as a staged learning platform prototype, not just a quiz game.
 
-Phase 2: Content operations
-- Move question bank to JSON with schema validation
-- Build a lightweight authoring pipeline for SMEs/instructors
-- Add metadata tags for role-based playlists (Dev, SRE, Security)
+Its current maturity looks like this:
+- Strong interactive learning prototype
+- Good static-delivery architecture
+- Good content framework for expansion
+- Moderate gameplay and remediation sophistication
+- Weak operational platform maturity
+- Incomplete advanced curriculum execution
 
-Phase 3: LMS integration
-- Add authentication and learner profiles
-- Add instructor/admin dashboard
-- Export progress and outcomes via xAPI/SCORM/LTI-compatible adapters
-- Introduce certificates and cohort assignments
+In short:
+- The engine is ahead of the authored curriculum in several places
+- The curriculum roadmap is ahead of the currently shipped content
+- The product pedagogy is ahead of its LMS/platform capabilities
 
-Phase 4: Adaptive intelligence
-- Difficulty adaptation based on mistake clusters
-- Recommendation engine for next learning modules
-- Role-specific paths (Go developer, SRE, platform engineer)
+## 12) Recommended Next Documentation Focus
+If this document is expanded again later, the highest-value additions would be:
 
-## 12) Final assessment
-KubeCraft is a **high-quality interactive Kubernetes learning game** with strong applied pedagogy and clear technical structure.
+- A per-level completion tracker table for active vs target content
+- A question-authoring schema reference for contributors
+- A section mapping engine capabilities to actual curriculum usage
+- A learning-outcomes matrix by level
+- A product roadmap split into content, pedagogy, and platform tracks
 
-As-is, it is best treated as:
-- A standalone training module
-- Or a reusable assessment/learning component inside a broader LMS
+## 13) Final Assessment
+KubeCraft is a promising Kubernetes training application with stronger instructional design and runtime capability than the previous document reflected.
 
-With persistence, analytics, and integration layers added, it can evolve into a robust enterprise-grade Kubernetes learning product.
+Today it is:
+- A static, single-player learning app
+- A mixed-mode Kubernetes practice engine
+- A partially implemented long-form campaign
 
+It is not yet:
+- A complete expert curriculum
+- A multi-user LMS
+- A production-grade learning platform with analytics and authoring operations
+
+That distinction matters. The repository already contains meaningful progress that the old document missed, but it also contains roadmap scaffolding that should not be described as finished product.
